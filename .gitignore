@@ -1,5 +1,12 @@
 # Environment files
 .env
+voicely-473515-17ba56fc6e39.json
 
 # DS store files
 .DS_Store
+
+# Python
+app/__pycache__/
+app/*/__pycache__/
+app/*/*/__pycache__/
+app/*/*/*/__pycache__/

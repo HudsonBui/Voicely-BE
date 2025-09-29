@@ -4,8 +4,8 @@ LABEL maintainer="Dan Bui"
 ENV PYTHONUNBUFFERED=1
 
 COPY ./requirements.txt /tmp/requirements.txt
-COPY ./app /app
-WORKDIR /app
+COPY ./app /code/app
+WORKDIR /code
 EXPOSE 8000
 
 RUN python -m venv /py && \
