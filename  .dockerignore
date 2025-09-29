@@ -10,6 +10,9 @@ app/__pycache__/
 app/*/__pycache__/
 app/*/*/__pycache__/
 app/*/*/*/__pycache__/
+
+# Environments
 .env/
 .venv/
 venv/
+voicely-473515-17ba56fc6e39.json

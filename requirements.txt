@@ -1,8 +1,13 @@
 fastapi
 uvicorn[standard]
-pydantic
+pydantic[email]
 pydantic-settings
 SQLAlchemy
-psycopg
+psycopg2-binary
 alembic
 python-multipart
+python-jose[cryptography]
+passlib
+python-dotenv
+google-cloud-speech
+# Note: ffmpeg system package is optional for audio duration detection
