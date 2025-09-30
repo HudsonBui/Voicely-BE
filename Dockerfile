@@ -13,6 +13,10 @@ RUN python -m venv /py && \
     /py/bin/pip install -r /tmp/requirements.txt && \
     rm -rf /tmp/requirements.txt
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
 # Setup user
 RUN adduser \
     --disabled-password \
