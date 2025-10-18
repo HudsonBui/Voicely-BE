@@ -45,10 +45,10 @@ async def startup_event():
                 logging.error("Failed to connect to database after all retries")
                 raise
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to Voicely API"}
+# @app.get("/")
+# async def root():
+#     return {"message": "Welcome to Voicely API"}
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
+# @app.get("/health")
+# async def health_check():
+#     return {"status": "healthy"}

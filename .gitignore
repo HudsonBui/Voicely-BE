@@ -1,6 +1,9 @@
 # Environment files
 .env
+#dangbh39@gmail.com
 voicely-473515-17ba56fc6e39.json
+#dangduyai36@gmail.com
+voicely-474001-842320946404.json
 
 # DS store files
 .DS_Store
@@ -10,3 +13,8 @@ app/__pycache__/
 app/*/__pycache__/
 app/*/*/__pycache__/
 app/*/*/*/__pycache__/
+
+# Uploaded files
+uploads/
+uploads/audio/
+uploads/audio/*

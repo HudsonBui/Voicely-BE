@@ -15,5 +15,6 @@ class User(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     
-    # Relationship with AudioFile
+    # Relationships
     audio_files = relationship("AudioFile", back_populates="user")
+    notes = relationship("Note", back_populates="user")
