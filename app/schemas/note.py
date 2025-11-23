@@ -64,3 +64,13 @@ class NoteCategoriesResponse(BaseModel):
 
 class NotePrioritiesResponse(BaseModel):
     priorities: List[str]
+
+# Summary request/response
+class SummarizeTranscriptRequest(BaseModel):
+    audio_file_id: int
+
+class SummarizeTranscriptResponse(BaseModel):
+    audio_file_id: int
+    summary_html: str
+    note_id: int
+    message: str

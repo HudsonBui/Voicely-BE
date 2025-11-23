@@ -1,11 +1,10 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
-from typing import List
 from datetime import datetime
 
 from app.api.deps import get_db, get_current_active_user
-from app.models import User, AudioFile
+from app.models import User
 from app.schemas.transcript import (
     TranscriptRequest, 
     TranscriptResponse, 
@@ -32,17 +31,19 @@ async def transcribe_audio(
     """
     
     # Get the audio file
-    audio_file = audio_service.get_audio_file_by_id(
+    audio_file_response = audio_service.get_audio_file_by_id(
         db=db,
         audio_id=request.audio_id,
         user=current_user
     )
     
-    if not audio_file:
+    if not audio_file_response.success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
+            status_code=audio_file_response.code,
+            detail=audio_file_response.message
         )
+    
+    audio_file = audio_file_response.data
     
     # Check if transcription service is available
     if not transcript_service.is_transcription_available():
@@ -72,17 +73,42 @@ async def transcribe_audio(
         db.commit()
         
         # Perform transcription
-        transcription_result = transcript_service.transcribe_audio_file(
+        transcription_response = transcript_service.transcribe_audio(
             audio_file=audio_file,
             language_code=request.language_code
         )
+        if not transcription_response.success:
+            audio_file.status = "failed"
+            db.commit()
+            raise HTTPException(
+                status_code=transcription_response.code,
+                detail=transcription_response.message
+            )
+
+        transcription_result = transcription_response.data or {}
+        if not transcription_result:
+            audio_file.status = "failed"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Transcription result is empty"
+            )
         
         # Update database with results
-        updated_audio_file = transcript_service.update_audio_file_transcription(
+        update_response = transcript_service.update_audio_file_transcription(
             db=db,
             audio_file=audio_file,
             transcription_result=transcription_result
         )
+        if not update_response.success:
+            audio_file.status = "failed"
+            db.commit()
+            raise HTTPException(
+                status_code=update_response.code,
+                detail=update_response.message
+            )
+
+        updated_audio_file = update_response.data
         
         # Return response
         return TranscriptResponse(
@@ -234,17 +260,19 @@ def delete_transcription(
     Delete the transcription data for an audio file (keeps the audio file).
     """
     
-    audio_file = audio_service.get_audio_file_by_id(
+    audio_file_response = audio_service.get_audio_file_by_id(
         db=db,
         audio_id=audio_id,
         user=current_user
     )
     
-    if not audio_file:
+    if not audio_file_response.success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
+            status_code=audio_file_response.code,
+            detail=audio_file_response.message
         )
+    
+    audio_file = audio_file_response.data
     
     try:
         # Clear transcription data
@@ -273,17 +301,19 @@ def check_transcription_compatibility(
     Check if an audio file can be transcribed with current setup.
     """
     
-    audio_file = audio_service.get_audio_file_by_id(
+    audio_file_response = audio_service.get_audio_file_by_id(
         db=db,
         audio_id=audio_id,
         user=current_user
     )
     
-    if not audio_file:
+    if not audio_file_response.success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
+            status_code=audio_file_response.code,
+            detail=audio_file_response.message
         )
+    
+    audio_file = audio_file_response.data
     
     # Check if transcription service is available
     if not transcript_service.is_transcription_available():

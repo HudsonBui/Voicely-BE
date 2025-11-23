@@ -1,15 +1,16 @@
 import os
 import uuid
 from typing import Optional
-from fastapi import UploadFile, HTTPException, status
+from fastapi import UploadFile, status
 from sqlalchemy.orm import Session
 import shutil
 from pathlib import Path
-import mimetypes
 import subprocess
 
 from app.models import AudioFile, User
 from app.schemas.audio import AudioFileCreate
+from app.common.command_message import CommonMessage
+from app.common.response_common import ResponseCommon
 
 class AudioService:
     def __init__(self):
@@ -28,26 +29,32 @@ class AudioService:
         }
         self.max_file_size = 70 * 1024 * 1024  # 70MB limit
 
-    def validate_audio_file(self, file: UploadFile) -> tuple[bool, str]:
+    def validate_audio_file(self, file: UploadFile) -> ResponseCommon:
         """Validate uploaded audio file"""
         
         # Check file size
         if hasattr(file, 'size') and file.size > self.max_file_size:
-            return False, "File size exceeds 70MB limit"
+            return ResponseCommon.error_response(
+                message=CommonMessage.AUDIO_FILE_TOO_LARGE,
+                code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+            )
         
         # Check content type
         content_type = file.content_type
         if content_type not in self.allowed_formats:
-            return False, f"Unsupported audio format: {content_type}. Supported formats: {list(self.allowed_formats.values())}"
+            return ResponseCommon.error_response(
+                message=CommonMessage.AUDIO_FILE_INVALID_FORMAT,
+                code=status.HTTP_400_BAD_REQUEST
+            )
         
         # Additional validation could include:
         # - File header validation
         # - Duration limits
         # - Sample rate checks
         
-        return True, "File is valid"
+        return ResponseCommon.success_response(message="File is valid")
 
-    def save_uploaded_file(self, file: UploadFile, user: User) -> tuple[str, str]:
+    def save_uploaded_file(self, file: UploadFile, user: User) -> ResponseCommon:
         """Save uploaded file to disk and return file path and format"""
         
         # Generate unique filename
@@ -59,13 +66,20 @@ class AudioService:
         try:
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file: {str(e)}"
+        except Exception:
+            return ResponseCommon.error_response(
+                message=CommonMessage.AUDIO_FILE_SAVE_FAILED,
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        return str(file_path), file_extension
+        return ResponseCommon.success_response(
+            code=status.HTTP_201_CREATED,
+            message="Audio file saved successfully",
+            data={
+                "file_path": str(file_path),
+                "file_format": file_extension
+            }
+        )
 
     def get_audio_duration(self, file_path: str) -> Optional[float]:
         """Get audio duration using ffprobe (if available)"""
@@ -93,7 +107,7 @@ class AudioService:
         user: User, 
         file_path: str, 
         file_format: str
-    ) -> AudioFile:
+    ) -> ResponseCommon:
         """Create audio file record in database"""
         
         # Get file size
@@ -129,26 +143,52 @@ class AudioService:
             status="uploaded"
         )
         
-        db.add(audio_file)
-        db.commit()
-        db.refresh(audio_file)
+        try:
+            db.add(audio_file)
+            db.commit()
+            db.refresh(audio_file)
+        except Exception:
+            db.rollback()
+            return ResponseCommon.error_response(
+                message=CommonMessage.AUDIO_FILE_SAVE_FAILED,
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
-        return audio_file
+        return ResponseCommon.success_response(
+            code=status.HTTP_201_CREATED,
+            message="Audio record created successfully",
+            data=audio_file
+        )
 
-    def get_user_audio_files(self, db: Session, user: User, skip: int = 0, limit: int = 100):
+    def get_user_audio_files(self, db: Session, user: User, skip: int = 0, limit: int = 100) -> ResponseCommon:
         """Get audio files for a user"""
-        return db.query(AudioFile).filter(
+        audio_files = db.query(AudioFile).filter(
             AudioFile.user_id == user.id
         ).offset(skip).limit(limit).all()
+        return ResponseCommon.success_response(
+            data=audio_files,
+            message="Audio files retrieved successfully"
+        )
 
-    def get_audio_file_by_id(self, db: Session, audio_id: int, user: User) -> Optional[AudioFile]:
+    def get_audio_file_by_id(self, db: Session, audio_id: int, user: User) -> ResponseCommon:
         """Get specific audio file by ID for a user"""
-        return db.query(AudioFile).filter(
+        audio_file = db.query(AudioFile).filter(
             AudioFile.id == audio_id,
             AudioFile.user_id == user.id
         ).first()
 
-    def delete_audio_file(self, db: Session, audio_file: AudioFile) -> bool:
+        if not audio_file:
+            return ResponseCommon.error_response(
+                message=CommonMessage.AUDIO_NOT_FOUND,
+                code=status.HTTP_404_NOT_FOUND
+            )
+
+        return ResponseCommon.success_response(
+            data=audio_file,
+            message="Audio file retrieved successfully"
+        )
+
+    def delete_audio_file(self, db: Session, audio_file: AudioFile) -> ResponseCommon:
         """Delete audio file from database and filesystem"""
         try:
             # Delete from filesystem
@@ -158,9 +198,14 @@ class AudioService:
             # Delete from database
             db.delete(audio_file)
             db.commit()
-            return True
-        except Exception as e:
+            return ResponseCommon.success_response(
+                message="Audio file deleted successfully"
+            )
+        except Exception:
             db.rollback()
-            return False
+            return ResponseCommon.error_response(
+                message="Failed to delete audio file",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 audio_service = AudioService()

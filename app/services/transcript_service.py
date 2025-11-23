@@ -25,6 +25,8 @@ except ImportError:
     AudioSegment = None
 
 from app.models import AudioFile
+from app.common.command_message import CommonMessage
+from app.common.response_common import ResponseCommon
 
 logger = logging.getLogger(__name__)
 
@@ -252,13 +254,13 @@ class TranscriptService:
         if not self.is_transcription_available():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Transcription service is not available. Please configure Google Cloud Speech API."
+                detail=CommonMessage.TRANSCRIPTION_SERVICE_UNAVAILABLE
             )
         
         if not os.path.exists(audio_file.file_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Audio file not found on disk"
+                detail=CommonMessage.AUDIO_FILE_NOT_FOUND_ON_DISK
             )
         
         try:
@@ -309,10 +311,7 @@ class TranscriptService:
                 if not self.is_gcs_available():
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"Audio file ({file_size / 1024 / 1024:.1f}MB, {duration:.1f}s) requires Google Cloud Storage integration for transcription. "
-                               f"Long audio files must be uploaded to Google Cloud Storage first. "
-                               f"Configure GCS_BUCKET_NAME environment variable and ensure proper GCS permissions, "
-                               f"or use audio files shorter than 1 minute and smaller than 1MB."
+                        detail=CommonMessage.TRANSCRIPTION_GCS_REQUIRED
                     )
                 
                 # Use GCS-based transcription for large files
@@ -356,16 +355,14 @@ class TranscriptService:
                     else:
                         raise HTTPException(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"GCS transcription failed and file too large for fallback: {str(gcs_error)}"
+                            detail=CommonMessage.TRANSCRIPTION_GCS_FAILED
                         )
             
             # For files that can be processed directly
             if file_size > max_content_size:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"Audio file is too large ({file_size / 1024 / 1024:.1f}MB) for direct transcription. "
-                           f"Files larger than 10MB require Google Cloud Storage integration. "
-                           f"Please use smaller audio files or contact administrator to enable Cloud Storage support."
+                    detail=CommonMessage.AUDIO_FILE_TOO_LARGE
                 )
             
             # Read audio file
@@ -442,13 +439,39 @@ class TranscriptService:
             logger.error(f"Google Cloud API error: {e}")
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Google Cloud Speech API error: {str(e)}"
+                detail=CommonMessage.GOOGLE_CLOUD_API_ERROR
             )
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Transcription failed: {str(e)}"
+                detail=CommonMessage.TRANSCRIPTION_FAILED
+            )
+
+    def transcribe_audio(
+        self,
+        audio_file: AudioFile,
+        language_code: str = "en-US"
+    ) -> ResponseCommon:
+        """
+        Wrapper that returns a standardized response for transcription requests.
+        """
+        try:
+            result = self.transcribe_audio_file(audio_file=audio_file, language_code=language_code)
+            return ResponseCommon.success_response(
+                data=result,
+                message="Transcription completed successfully"
+            )
+        except HTTPException as exc:
+            return ResponseCommon.error_response(
+                message=str(exc.detail),
+                code=exc.status_code
+            )
+        except Exception as exc:
+            logger.error("Unexpected transcription error: %s", exc, exc_info=True)
+            return ResponseCommon.error_response(
+                message=CommonMessage.TRANSCRIPTION_FAILED,
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
     def update_audio_file_transcription(
@@ -456,7 +479,7 @@ class TranscriptService:
         db: Session, 
         audio_file: AudioFile, 
         transcription_result: Dict[str, Any]
-    ) -> AudioFile:
+    ) -> ResponseCommon:
         """Update audio file with transcription results"""
         
         try:
@@ -468,15 +491,18 @@ class TranscriptService:
             db.commit()
             db.refresh(audio_file)
             
-            logger.info(f"Updated audio file {audio_file.id} with transcription")
-            return audio_file
+            logger.info("Updated audio file %s with transcription", audio_file.id)
+            return ResponseCommon.success_response(
+                data=audio_file,
+                message="Transcription updated successfully"
+            )
             
         except Exception as e:
             db.rollback()
-            logger.error(f"Failed to update audio file transcription: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to save transcription results"
+            logger.error("Failed to update audio file transcription: %s", e, exc_info=True)
+            return ResponseCommon.error_response(
+                message=CommonMessage.TRANSCRIPTION_SAVE_FAILED,
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
     def get_supported_languages(self) -> list:
