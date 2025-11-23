@@ -23,25 +23,40 @@ async def upload_audio_file(
     """
     
     # Validate file
-    is_valid, error_message = audio_service.validate_audio_file(file)
-    if not is_valid:
+    validation_result = audio_service.validate_audio_file(file)
+    if not validation_result.success:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_message
+            status_code=validation_result.code,
+            detail=validation_result.message
         )
     
     # Save file
     try:
-        file_path, file_format = audio_service.save_uploaded_file(file, current_user)
+        save_result = audio_service.save_uploaded_file(file, current_user)
+        if not save_result.success:
+            raise HTTPException(
+                status_code=save_result.code,
+                detail=save_result.message
+            )
+
+        file_path = save_result.data["file_path"]
+        file_format = save_result.data["file_format"]
         
         # Create database record
-        audio_file = audio_service.create_audio_record(
+        create_result = audio_service.create_audio_record(
             db=db,
             file=file,
             user=current_user,
             file_path=file_path,
             file_format=file_format
         )
+        if not create_result.success:
+            raise HTTPException(
+                status_code=create_result.code,
+                detail=create_result.message
+            )
+
+        audio_file = create_result.data
         
         return AudioUploadResponse(
             message="Audio file uploaded successfully",
@@ -54,6 +69,8 @@ async def upload_audio_file(
             }
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -70,13 +87,18 @@ def get_audio_files(
     """
     Get all audio files for the authenticated user.
     """
-    audio_files = audio_service.get_user_audio_files(
+    audio_files_response = audio_service.get_user_audio_files(
         db=db, 
         user=current_user, 
         skip=skip, 
         limit=limit
     )
-    return audio_files
+    if not audio_files_response.success:
+        raise HTTPException(
+            status_code=audio_files_response.code,
+            detail=audio_files_response.message
+        )
+    return audio_files_response.data
 
 @router.get("/files/{audio_id}", response_model=AudioFileSchema)
 def get_audio_file(
@@ -87,19 +109,19 @@ def get_audio_file(
     """
     Get a specific audio file by ID for the authenticated user.
     """
-    audio_file = audio_service.get_audio_file_by_id(
+    audio_file_response = audio_service.get_audio_file_by_id(
         db=db,
         audio_id=audio_id,
         user=current_user
     )
     
-    if not audio_file:
+    if not audio_file_response.success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
+            status_code=audio_file_response.code,
+            detail=audio_file_response.message
         )
     
-    return audio_file
+    return audio_file_response.data
 
 @router.delete("/files/{audio_id}")
 def delete_audio_file(
@@ -110,27 +132,30 @@ def delete_audio_file(
     """
     Delete a specific audio file by ID for the authenticated user.
     """
-    audio_file = audio_service.get_audio_file_by_id(
+    audio_file_response = audio_service.get_audio_file_by_id(
         db=db,
         audio_id=audio_id,
         user=current_user
     )
     
-    if not audio_file:
+    if not audio_file_response.success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
+            status_code=audio_file_response.code,
+            detail=audio_file_response.message
         )
     
-    success = audio_service.delete_audio_file(db=db, audio_file=audio_file)
+    delete_response = audio_service.delete_audio_file(
+        db=db,
+        audio_file=audio_file_response.data
+    )
     
-    if not success:
+    if not delete_response.success:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete audio file"
+            status_code=delete_response.code,
+            detail=delete_response.message
         )
     
-    return {"message": "Audio file deleted successfully"}
+    return {"message": delete_response.message}
 
 @router.get("/files/{audio_id}/download")
 def download_audio_file(
@@ -144,17 +169,19 @@ def download_audio_file(
     from fastapi.responses import FileResponse
     import os
     
-    audio_file = audio_service.get_audio_file_by_id(
+    audio_file_response = audio_service.get_audio_file_by_id(
         db=db,
         audio_id=audio_id,
         user=current_user
     )
     
-    if not audio_file:
+    if not audio_file_response.success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audio file not found"
+            status_code=audio_file_response.code,
+            detail=audio_file_response.message
         )
+
+    audio_file = audio_file_response.data
     
     if not os.path.exists(audio_file.file_path):
         raise HTTPException(

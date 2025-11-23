@@ -13,4 +13,5 @@ google-cloud-speech==2.21.0
 google-cloud-storage==2.10.0
 pydub==0.25.1
 ffmpeg-python==0.2.0
+google-genai==1.46.0
 # Note: ffmpeg system package is optional for audio duration detection
