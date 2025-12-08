@@ -11,6 +11,7 @@ from app.common.command_message import CommonMessage
 from app.common.constants import AIPrompts
 from app.models import AudioFile, Note
 from app.common.response_common import ResponseCommon
+from app.services.embedding_service import generate_document_embedding, generate_query_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 client = genai.Client(
     vertexai=True, 
     project=os.getenv('GOOGLE_CLOUD_PROJECT'), 
-    location='asia-southeast1'
+    location=os.getenv('GOOGLE_CLOUD_LOCATION')
 )
 
 
@@ -56,13 +57,15 @@ def summarize_audio_transcript(
             contents=user_prompt,
             config=types.GenerateContentConfig(
                 system_instruction=AIPrompts.SUMMARY_SYSTEM_PROMPT,
-                temperature=0.3,
-                max_output_tokens=2048,
+                temperature=0.7,
             )
         )
+
+        logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ generated summary for audio_file_id=%s", audio_file_id)
+        logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ generatedContent=%s", response.text)
         
         summary_html = response.text.strip()
-        logger.info("Successfully generated summary (%s chars)", len(summary_html))
+        logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ html_response=%s", summary_html)
         
     except Exception as e:
         logger.error("Failed to generate summary: %s", e, exc_info=True)
@@ -76,12 +79,28 @@ def summarize_audio_transcript(
         if not title:
             title = f"Note from {audio_file.created_at.strftime('%Y-%m-%d %H:%M')}"
         
+        # Generate embeddings for content and summary
+        content_embedding = None
+        summary_embedding = None
+        
+        if audio_file.transcription:
+            content_embedding = generate_document_embedding(audio_file.transcription)
+            if content_embedding:
+                logger.info("Generated content embedding for audio %s", audio_file_id)
+        
+        if summary_html:
+            summary_embedding = generate_document_embedding(summary_html)
+            if summary_embedding:
+                logger.info("Generated summary embedding for audio %s", audio_file_id)
+        
         note = Note(
             user_id=user_id,
             audio_file_id=audio_file_id,
             title=title,
             content=audio_file.transcription,
             summary=summary_html,
+            content_embedding=content_embedding,
+            summary_embedding=summary_embedding,
             category="transcription",
             tags="audio,transcription"
         )
@@ -243,6 +262,19 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
                     code=status.HTTP_404_NOT_FOUND
                 )
         
+        # Generate embeddings for content and summary if not provided
+        if "content_embedding" not in note_data and note_data.get("content"):
+            content_embedding = generate_document_embedding(note_data["content"])
+            if content_embedding:
+                note_data["content_embedding"] = content_embedding
+                logger.info("Generated content embedding for new note")
+        
+        if "summary_embedding" not in note_data and note_data.get("summary"):
+            summary_embedding = generate_document_embedding(note_data["summary"])
+            if summary_embedding:
+                note_data["summary_embedding"] = summary_embedding
+                logger.info("Generated summary embedding for new note")
+        
         # Create note
         note = Note(
             user_id=user_id,
@@ -292,6 +324,19 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
     note = note_response.data
     
     try:
+        # Generate new embeddings if content or summary is updated
+        if "content" in update_data and update_data["content"]:
+            content_embedding = generate_document_embedding(update_data["content"])
+            if content_embedding:
+                update_data["content_embedding"] = content_embedding
+                logger.info("Updated content embedding for note %s", note_id)
+        
+        if "summary" in update_data and update_data["summary"]:
+            summary_embedding = generate_document_embedding(update_data["summary"])
+            if summary_embedding:
+                update_data["summary_embedding"] = summary_embedding
+                logger.info("Updated summary embedding for note %s", note_id)
+        
         # Update only provided fields
         for field, value in update_data.items():
             if value is not None and hasattr(note, field):
@@ -387,3 +432,121 @@ def get_note_priorities() -> ResponseCommon:
         data=["low", "normal", "high", "urgent"],
         message="Note priorities retrieved successfully"
     )
+
+
+def semantic_search_notes(
+    db: Session,
+    user_id: int,
+    query: str,
+    limit: int = 10,
+    search_in: str = "both",  # "content", "summary", or "both"
+    similarity_threshold: float = 0.5
+) -> ResponseCommon:
+    """
+    Search notes using semantic similarity based on embeddings.
+    
+    Args:
+        db: Database session
+        user_id: User ID
+        query: Search query text
+        limit: Maximum number of results to return
+        search_in: Where to search - "content", "summary", or "both"
+        similarity_threshold: Minimum similarity score (0-1)
+        
+    Returns:
+        List of notes with similarity scores, ordered by relevance
+    """
+    from sqlalchemy import func, case
+    
+    # Generate query embedding
+    query_embedding = generate_query_embedding(query)
+    
+    if not query_embedding:
+        return ResponseCommon.error_response(
+            message="Failed to generate query embedding",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+    try:
+        # Build query based on search_in parameter
+        query_base = db.query(Note).filter(
+            Note.user_id == user_id,
+            Note.is_archived == False
+        )
+        
+        if search_in == "content":
+            # Search only in content embeddings
+            query_base = query_base.filter(Note.content_embedding.isnot(None))
+            similarity_expr = (1 - func.cosine_distance(Note.content_embedding, query_embedding))
+            
+        elif search_in == "summary":
+            # Search only in summary embeddings
+            query_base = query_base.filter(Note.summary_embedding.isnot(None))
+            similarity_expr = (1 - func.cosine_distance(Note.summary_embedding, query_embedding))
+            
+        else:  # "both"
+            # Search in both, use the higher similarity score
+            query_base = query_base.filter(
+                or_(
+                    Note.content_embedding.isnot(None),
+                    Note.summary_embedding.isnot(None)
+                )
+            )
+            
+            content_similarity = case(
+                (Note.content_embedding.isnot(None), 
+                 1 - func.cosine_distance(Note.content_embedding, query_embedding)),
+                else_=0
+            )
+            
+            summary_similarity = case(
+                (Note.summary_embedding.isnot(None), 
+                 1 - func.cosine_distance(Note.summary_embedding, query_embedding)),
+                else_=0
+            )
+            
+            # Use the maximum similarity between content and summary
+            similarity_expr = func.greatest(content_similarity, summary_similarity)
+        
+        # Add similarity score to query and filter by threshold
+        results = query_base.add_columns(
+            similarity_expr.label('similarity')
+        ).filter(
+            similarity_expr >= similarity_threshold
+        ).order_by(
+            similarity_expr.desc()
+        ).limit(limit).all()
+        
+        # Format results
+        notes_with_scores = [
+            {
+                "note": note,
+                "similarity_score": float(similarity)
+            }
+            for note, similarity in results
+        ]
+        
+        logger.info(
+            "Semantic search found %d notes for user %s (threshold=%.2f)",
+            len(notes_with_scores),
+            user_id,
+            similarity_threshold
+        )
+        
+        return ResponseCommon.success_response(
+            data={
+                "results": notes_with_scores,
+                "total_count": len(notes_with_scores),
+                "query": query,
+                "search_in": search_in
+            },
+            message=f"Found {len(notes_with_scores)} relevant notes"
+        )
+        
+    except Exception as e:
+        logger.error("Semantic search failed: %s", e, exc_info=True)
+        return ResponseCommon.error_response(
+            message="Semantic search failed",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

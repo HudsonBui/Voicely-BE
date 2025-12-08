@@ -14,7 +14,9 @@ from app.schemas.note import (
     NoteCategoriesResponse,
     NotePrioritiesResponse,
     SummarizeTranscriptRequest,
-    SummarizeTranscriptResponse
+    SummarizeTranscriptResponse,
+    SemanticSearchRequest,
+    SemanticSearchResponse
 )
 from app.services.note_service import (
     summarize_audio_transcript,
@@ -24,7 +26,8 @@ from app.services.note_service import (
     update_note,
     delete_note,
     get_note_categories,
-    get_note_priorities
+    get_note_priorities,
+    semantic_search_notes
 )
 
 router = APIRouter()
@@ -231,4 +234,53 @@ async def summarize_transcript(
         summary_html=data.get("summary_html", ""),
         note_id=data.get("note_id"),
         message=result.message or CommonMessage.SUMMARY_CREATED_SUCCESS
+    )
+
+
+@router.post("/semantic-search", response_model=SemanticSearchResponse)
+async def search_notes_by_semantic(
+    request: SemanticSearchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Search notes using semantic similarity based on vector embeddings.
+    
+    This endpoint uses AI embeddings to find notes that are semantically similar
+    to your search query, even if they don't contain the exact keywords.
+    
+    Args:
+        request: Contains query text and search parameters
+            - query: The search query text
+            - limit: Maximum number of results (default: 10)
+            - search_in: Where to search - "content", "summary", or "both" (default: "both")
+            - similarity_threshold: Minimum similarity score 0-1 (default: 0.5)
+        
+    Returns:
+        List of notes with similarity scores, ordered by relevance
+    """
+    
+    result = semantic_search_notes(
+        db=db,
+        user_id=current_user.id,
+        query=request.query,
+        limit=request.limit,
+        search_in=request.search_in,
+        similarity_threshold=request.similarity_threshold
+    )
+    
+    if not result.success:
+        raise HTTPException(
+            status_code=result.code,
+            detail=result.message
+        )
+    
+    data = result.data or {}
+    
+    return SemanticSearchResponse(
+        results=data.get("results", []),
+        total_count=data.get("total_count", 0),
+        query=data.get("query", ""),
+        search_in=data.get("search_in", "both"),
+        message=result.message or "Semantic search completed"
     )

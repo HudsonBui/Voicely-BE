@@ -316,3 +316,8 @@ class PaginationDefaults:
     DEFAULT_PAGE_SIZE = 20
     MAX_PAGE_SIZE = 100
     MIN_PAGE_SIZE = 1
+
+class Common:
+    # Embedding model configuration
+    EMBEDDING_MODEL = "text-embedding-005"
+    EMBEDDING_DIMENSION = 768  # Default dimension for text-embedding-005

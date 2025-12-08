@@ -1,4 +1,5 @@
 from app.models.base_import import Base, Column, Integer, String, Boolean, DateTime, datetime, timezone, Text, Float, ForeignKey, relationship
+from pgvector.sqlalchemy import Vector
 
 class Note(Base):
     __tablename__ = "notes"
@@ -11,6 +12,8 @@ class Note(Base):
     title = Column(String(200), nullable=False)
     content = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)  # AI-generated summary
+    content_embedding = Column(Vector(768), nullable=True)  # 768 Dimension Vector embedding
+    summary_embedding = Column(Vector(768), nullable=True)  # 768 Dimension Vector embedding
     
     # Categorization
     category = Column(String(50), default="general")  # meeting, lecture, personal, etc.

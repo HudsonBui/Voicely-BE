@@ -9,10 +9,9 @@ voicely-474001-842320946404.json
 .DS_Store
 
 # Python
-app/__pycache__/
-app/*/__pycache__/
-app/*/*/__pycache__/
-app/*/*/*/__pycache__/
+__pycache__/
+*.pyc
+
 
 # Uploaded files
 uploads/
