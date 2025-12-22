@@ -7,11 +7,15 @@ from sqlalchemy import desc, or_
 from fastapi import status
 import logging
 
-from app.common.command_message import CommonMessage
+from app.common.common_message import CommonMessage
 from app.common.constants import AIPrompts
-from app.models import AudioFile, Note
+from app.models import AudioFile, Note, NoteChunk
 from app.common.response_common import ResponseCommon
-from app.services.embedding_service import generate_document_embedding, generate_query_embedding
+from app.services.embedding_service import (
+    chunk_text, 
+    generate_chunk_embeddings, 
+    generate_query_embedding
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,10 +66,26 @@ def summarize_audio_transcript(
         )
 
         logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ generated summary for audio_file_id=%s", audio_file_id)
-        logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ generatedContent=%s", response.text)
         
-        summary_html = response.text.strip()
-        logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ html_response=%s", summary_html)
+        # Parse and validate Quill Delta JSON
+        summary_json_text = response.text.strip()
+        logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ raw_json_response=%s", summary_json_text)
+        
+        # Validate JSON format
+        import json
+        try:
+            summary_delta = json.loads(summary_json_text)
+            if not isinstance(summary_delta, list):
+                raise ValueError("Summary must be a JSON array (Quill Delta format)")
+            logger.info("✅ Valid Quill Delta JSON with %d operations", len(summary_delta))
+            # Store as JSON string for database
+            summary_json = json.dumps(summary_delta, ensure_ascii=False)
+        except json.JSONDecodeError as je:
+            logger.error("Invalid JSON from Gemini: %s", je)
+            return ResponseCommon.error_response(
+                message="AI returned invalid JSON format",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
     except Exception as e:
         logger.error("Failed to generate summary: %s", e, exc_info=True)
@@ -79,33 +99,78 @@ def summarize_audio_transcript(
         if not title:
             title = f"Note from {audio_file.created_at.strftime('%Y-%m-%d %H:%M')}"
         
-        # Generate embeddings for content and summary
-        content_embedding = None
-        summary_embedding = None
-        
-        if audio_file.transcription:
-            content_embedding = generate_document_embedding(audio_file.transcription)
-            if content_embedding:
-                logger.info("Generated content embedding for audio %s", audio_file_id)
-        
-        if summary_html:
-            summary_embedding = generate_document_embedding(summary_html)
-            if summary_embedding:
-                logger.info("Generated summary embedding for audio %s", audio_file_id)
-        
+        # Create note first
         note = Note(
             user_id=user_id,
             audio_file_id=audio_file_id,
             title=title,
             content=audio_file.transcription,
-            summary=summary_html,
-            content_embedding=content_embedding,
-            summary_embedding=summary_embedding,
+            summary=summary_json,  # Store Quill Delta JSON string
             category="transcription",
             tags="audio,transcription"
         )
         
         db.add(note)
+        db.flush()  # Get note.id without committing
+        
+        # Generate chunks with embeddings for content
+        if audio_file.transcription:
+            content_chunks = chunk_text(
+                audio_file.transcription,
+                chunk_size=500,
+                chunk_overlap=100,
+                chunk_type="content"
+            )
+            
+            if content_chunks:
+                content_chunks_with_embeddings = generate_chunk_embeddings(content_chunks)
+                
+                # Save chunks to database
+                for chunk_data in content_chunks_with_embeddings:
+                    if chunk_data["embedding"]:  # Only save if embedding was generated
+                        note_chunk = NoteChunk(
+                            note_id=note.id,
+                            chunk_text=chunk_data["chunk_text"],
+                            chunk_index=chunk_data["chunk_index"],
+                            chunk_type=chunk_data["chunk_type"],
+                            embedding=chunk_data["embedding"],
+                            start_char=chunk_data["start_char"],
+                            end_char=chunk_data["end_char"],
+                            token_count=chunk_data["token_count"]
+                        )
+                        db.add(note_chunk)
+                
+                logger.info("Created %d content chunks for note %s", len(content_chunks_with_embeddings), note.id)
+        
+        # Generate chunks with embeddings for summary
+        if summary_json:
+            summary_chunks = chunk_text(
+                summary_json,
+                chunk_size=500,
+                chunk_overlap=100,
+                chunk_type="summary"
+            )
+            
+            if summary_chunks:
+                summary_chunks_with_embeddings = generate_chunk_embeddings(summary_chunks)
+                
+                # Save chunks to database
+                for chunk_data in summary_chunks_with_embeddings:
+                    if chunk_data["embedding"]:  # Only save if embedding was generated
+                        note_chunk = NoteChunk(
+                            note_id=note.id,
+                            chunk_text=chunk_data["chunk_text"],
+                            chunk_index=chunk_data["chunk_index"],
+                            chunk_type=chunk_data["chunk_type"],
+                            embedding=chunk_data["embedding"],
+                            start_char=chunk_data["start_char"],
+                            end_char=chunk_data["end_char"],
+                            token_count=chunk_data["token_count"]
+                        )
+                        db.add(note_chunk)
+                
+                logger.info("Created %d summary chunks for note %s", len(summary_chunks_with_embeddings), note.id)
+        
         db.commit()
         db.refresh(note)
         
@@ -116,7 +181,7 @@ def summarize_audio_transcript(
             message=CommonMessage.SUMMARY_CREATED_SUCCESS,
             data={
                 "audio_file_id": audio_file_id,
-                "summary_html": summary_html,
+                "summary_json": summary_json,  # Return Quill Delta JSON string
                 "note_id": note.id
             }
         )
@@ -197,7 +262,7 @@ def get_notes_list(
             "page": (skip // limit) + 1 if limit > 0 else 1,
             "page_size": limit
         },
-        message="Notes retrieved successfully"
+        message=CommonMessage.NOTES_LIST_RETRIEVED_SUCCESS
     )
 
 
@@ -229,7 +294,7 @@ def get_note_by_id(db: Session, note_id: int, user_id: int) -> ResponseCommon:
     
     return ResponseCommon.success_response(
         data=note,
-        message="Note retrieved successfully"
+        message=CommonMessage.NOTE_RETRIEVED_SUCCESS
     )
 
 
@@ -262,19 +327,6 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
                     code=status.HTTP_404_NOT_FOUND
                 )
         
-        # Generate embeddings for content and summary if not provided
-        if "content_embedding" not in note_data and note_data.get("content"):
-            content_embedding = generate_document_embedding(note_data["content"])
-            if content_embedding:
-                note_data["content_embedding"] = content_embedding
-                logger.info("Generated content embedding for new note")
-        
-        if "summary_embedding" not in note_data and note_data.get("summary"):
-            summary_embedding = generate_document_embedding(note_data["summary"])
-            if summary_embedding:
-                note_data["summary_embedding"] = summary_embedding
-                logger.info("Generated summary embedding for new note")
-        
         # Create note
         note = Note(
             user_id=user_id,
@@ -282,6 +334,64 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
         )
         
         db.add(note)
+        db.flush()  # Get note.id without committing
+        
+        # Generate chunks with embeddings for content
+        if note_data.get("content"):
+            content_chunks = chunk_text(
+                note_data["content"],
+                chunk_size=500,
+                chunk_overlap=100,
+                chunk_type="content"
+            )
+            
+            if content_chunks:
+                content_chunks_with_embeddings = generate_chunk_embeddings(content_chunks)
+                
+                for chunk_data in content_chunks_with_embeddings:
+                    if chunk_data["embedding"]:
+                        note_chunk = NoteChunk(
+                            note_id=note.id,
+                            chunk_text=chunk_data["chunk_text"],
+                            chunk_index=chunk_data["chunk_index"],
+                            chunk_type=chunk_data["chunk_type"],
+                            embedding=chunk_data["embedding"],
+                            start_char=chunk_data["start_char"],
+                            end_char=chunk_data["end_char"],
+                            token_count=chunk_data["token_count"]
+                        )
+                        db.add(note_chunk)
+                
+                logger.info("Generated %d content chunks for new note", len(content_chunks_with_embeddings))
+        
+        # Generate chunks with embeddings for summary
+        if note_data.get("summary"):
+            summary_chunks = chunk_text(
+                note_data["summary"],
+                chunk_size=500,
+                chunk_overlap=100,
+                chunk_type="summary"
+            )
+            
+            if summary_chunks:
+                summary_chunks_with_embeddings = generate_chunk_embeddings(summary_chunks)
+                
+                for chunk_data in summary_chunks_with_embeddings:
+                    if chunk_data["embedding"]:
+                        note_chunk = NoteChunk(
+                            note_id=note.id,
+                            chunk_text=chunk_data["chunk_text"],
+                            chunk_index=chunk_data["chunk_index"],
+                            chunk_type=chunk_data["chunk_type"],
+                            embedding=chunk_data["embedding"],
+                            start_char=chunk_data["start_char"],
+                            end_char=chunk_data["end_char"],
+                            token_count=chunk_data["token_count"]
+                        )
+                        db.add(note_chunk)
+                
+                logger.info("Generated %d summary chunks for new note", len(summary_chunks_with_embeddings))
+        
         db.commit()
         db.refresh(note)
         
@@ -289,7 +399,7 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
         return ResponseCommon.success_response(
             code=status.HTTP_201_CREATED,
             data=note,
-            message="Note created successfully"
+            message=CommonMessage.NOTE_CREATED_SUCCESS
         )
         
     except Exception as e:
@@ -324,18 +434,74 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
     note = note_response.data
     
     try:
-        # Generate new embeddings if content or summary is updated
+        # Generate new chunks with embeddings if content or summary is updated
         if "content" in update_data and update_data["content"]:
-            content_embedding = generate_document_embedding(update_data["content"])
-            if content_embedding:
-                update_data["content_embedding"] = content_embedding
-                logger.info("Updated content embedding for note %s", note_id)
+            # Delete old content chunks
+            db.query(NoteChunk).filter(
+                NoteChunk.note_id == note_id,
+                NoteChunk.chunk_type == "content"
+            ).delete()
+            
+            # Create new content chunks
+            content_chunks = chunk_text(
+                update_data["content"],
+                chunk_size=500,
+                chunk_overlap=100,
+                chunk_type="content"
+            )
+            
+            if content_chunks:
+                content_chunks_with_embeddings = generate_chunk_embeddings(content_chunks)
+                
+                for chunk_data in content_chunks_with_embeddings:
+                    if chunk_data["embedding"]:
+                        note_chunk = NoteChunk(
+                            note_id=note_id,
+                            chunk_text=chunk_data["chunk_text"],
+                            chunk_index=chunk_data["chunk_index"],
+                            chunk_type=chunk_data["chunk_type"],
+                            embedding=chunk_data["embedding"],
+                            start_char=chunk_data["start_char"],
+                            end_char=chunk_data["end_char"],
+                            token_count=chunk_data["token_count"]
+                        )
+                        db.add(note_chunk)
+                
+                logger.info("Updated %d content chunks for note %s", len(content_chunks_with_embeddings), note_id)
         
         if "summary" in update_data and update_data["summary"]:
-            summary_embedding = generate_document_embedding(update_data["summary"])
-            if summary_embedding:
-                update_data["summary_embedding"] = summary_embedding
-                logger.info("Updated summary embedding for note %s", note_id)
+            # Delete old summary chunks
+            db.query(NoteChunk).filter(
+                NoteChunk.note_id == note_id,
+                NoteChunk.chunk_type == "summary"
+            ).delete()
+            
+            # Create new summary chunks
+            summary_chunks = chunk_text(
+                update_data["summary"],
+                chunk_size=500,
+                chunk_overlap=100,
+                chunk_type="summary"
+            )
+            
+            if summary_chunks:
+                summary_chunks_with_embeddings = generate_chunk_embeddings(summary_chunks)
+                
+                for chunk_data in summary_chunks_with_embeddings:
+                    if chunk_data["embedding"]:
+                        note_chunk = NoteChunk(
+                            note_id=note_id,
+                            chunk_text=chunk_data["chunk_text"],
+                            chunk_index=chunk_data["chunk_index"],
+                            chunk_type=chunk_data["chunk_type"],
+                            embedding=chunk_data["embedding"],
+                            start_char=chunk_data["start_char"],
+                            end_char=chunk_data["end_char"],
+                            token_count=chunk_data["token_count"]
+                        )
+                        db.add(note_chunk)
+                
+                logger.info("Updated %d summary chunks for note %s", len(summary_chunks_with_embeddings), note_id)
         
         # Update only provided fields
         for field, value in update_data.items():
@@ -348,7 +514,7 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
         logger.info("Updated note %s", note_id)
         return ResponseCommon.success_response(
             data=note,
-            message="Note updated successfully"
+            message=CommonMessage.NOTE_UPDATED_SUCCESS
         )
         
     except Exception as e:
@@ -417,7 +583,7 @@ def get_note_categories(db: Session, user_id: int) -> ResponseCommon:
     
     return ResponseCommon.success_response(
         data=[cat[0] for cat in categories if cat[0]],
-        message="Note categories retrieved successfully"
+        message=CommonMessage.NOTE_CATEGORIES_RETRIEVED_SUCCESS
     )
 
 
@@ -430,7 +596,7 @@ def get_note_priorities() -> ResponseCommon:
     """
     return ResponseCommon.success_response(
         data=["low", "normal", "high", "urgent"],
-        message="Note priorities retrieved successfully"
+        message=CommonMessage.NOTE_PRIORITIES_RETRIEVED_SUCCESS
     )
 
 
@@ -443,7 +609,8 @@ def semantic_search_notes(
     similarity_threshold: float = 0.5
 ) -> ResponseCommon:
     """
-    Search notes using semantic similarity based on embeddings.
+    Search notes using semantic similarity based on chunk embeddings.
+    Uses RAG approach: searches through chunks and returns parent notes.
     
     Args:
         db: Database session
@@ -456,7 +623,7 @@ def semantic_search_notes(
     Returns:
         List of notes with similarity scores, ordered by relevance
     """
-    from sqlalchemy import func, case
+    from sqlalchemy import func
     
     # Generate query embedding
     query_embedding = generate_query_embedding(query)
@@ -468,62 +635,60 @@ def semantic_search_notes(
         )
     
     try:
-        # Build query based on search_in parameter
-        query_base = db.query(Note).filter(
+        # Build query to search through chunks
+        chunk_query = db.query(
+            NoteChunk.note_id,
+            func.max(1 - func.cosine_distance(NoteChunk.embedding, query_embedding)).label('max_similarity')
+        ).join(
+            Note, NoteChunk.note_id == Note.id
+        ).filter(
             Note.user_id == user_id,
             Note.is_archived == False
         )
         
+        # Filter by chunk_type based on search_in parameter
         if search_in == "content":
-            # Search only in content embeddings
-            query_base = query_base.filter(Note.content_embedding.isnot(None))
-            similarity_expr = (1 - func.cosine_distance(Note.content_embedding, query_embedding))
-            
+            chunk_query = chunk_query.filter(NoteChunk.chunk_type == "content")
         elif search_in == "summary":
-            # Search only in summary embeddings
-            query_base = query_base.filter(Note.summary_embedding.isnot(None))
-            similarity_expr = (1 - func.cosine_distance(Note.summary_embedding, query_embedding))
-            
-        else:  # "both"
-            # Search in both, use the higher similarity score
-            query_base = query_base.filter(
-                or_(
-                    Note.content_embedding.isnot(None),
-                    Note.summary_embedding.isnot(None)
-                )
-            )
-            
-            content_similarity = case(
-                (Note.content_embedding.isnot(None), 
-                 1 - func.cosine_distance(Note.content_embedding, query_embedding)),
-                else_=0
-            )
-            
-            summary_similarity = case(
-                (Note.summary_embedding.isnot(None), 
-                 1 - func.cosine_distance(Note.summary_embedding, query_embedding)),
-                else_=0
-            )
-            
-            # Use the maximum similarity between content and summary
-            similarity_expr = func.greatest(content_similarity, summary_similarity)
+            chunk_query = chunk_query.filter(NoteChunk.chunk_type == "summary")
+        # If "both", no filter needed
         
-        # Add similarity score to query and filter by threshold
-        results = query_base.add_columns(
-            similarity_expr.label('similarity')
-        ).filter(
-            similarity_expr >= similarity_threshold
+        # Group by note_id and get the maximum similarity for each note
+        chunk_query = chunk_query.group_by(NoteChunk.note_id).having(
+            func.max(1 - func.cosine_distance(NoteChunk.embedding, query_embedding)) >= similarity_threshold
         ).order_by(
-            similarity_expr.desc()
-        ).limit(limit).all()
+            func.max(1 - func.cosine_distance(NoteChunk.embedding, query_embedding)).desc()
+        ).limit(limit)
         
-        # Format results
+        # Execute chunk query to get note_ids with similarities
+        chunk_results = chunk_query.all()
+        
+        if not chunk_results:
+            logger.info("Semantic search found 0 notes for user %s", user_id)
+            return ResponseCommon.success_response(
+                data={
+                    "results": [],
+                    "total_count": 0,
+                    "query": query,
+                    "search_in": search_in
+                },
+                message="No relevant notes found"
+            )
+        
+        # Get the actual Note objects
+        note_ids = [result.note_id for result in chunk_results]
+        notes = db.query(Note).filter(Note.id.in_(note_ids)).all()
+        
+        # Create a mapping of note_id to similarity score
+        similarity_map = {result.note_id: float(result.max_similarity) for result in chunk_results}
+        
+        # Sort notes by similarity score and format results
         notes_with_scores = [
             {
                 "note": note,
-                "similarity_score": float(similarity)
+                "similarity_score": similarity_map[note.id]
             }
-            for note, similarity in results
+            for note in sorted(notes, key=lambda n: similarity_map[n.id], reverse=True)
         ]
         
         logger.info(
@@ -540,7 +705,7 @@ def semantic_search_notes(
                 "query": query,
                 "search_in": search_in
             },
-            message=f"Found {len(notes_with_scores)} relevant notes"
+            message=CommonMessage.SEMANTIC_SEARCH_COMPLETED
         )
         
     except Exception as e:

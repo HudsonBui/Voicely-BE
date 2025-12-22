@@ -175,3 +175,125 @@ def calculate_cosine_similarity(embedding1: List[float], embedding2: List[float]
     except Exception as e:
         logger.error("Failed to calculate cosine similarity: %s", e, exc_info=True)
         return 0.0
+
+
+def chunk_text(
+    text: str, 
+    chunk_size: int = 500,
+    chunk_overlap: int = 100,
+    chunk_type: str = "content"
+) -> List[dict]:
+    """
+    Split text into overlapping chunks for better RAG performance.
+    
+    Args:
+        text: The text to chunk
+        chunk_size: Target number of characters per chunk (default: 500)
+        chunk_overlap: Number of characters to overlap between chunks (default: 100)
+        chunk_type: Type of chunk - "content" or "summary"
+        
+    Returns:
+        List of dictionaries containing chunk information:
+        - chunk_text: The text content of the chunk
+        - chunk_index: Order of chunk in original text
+        - chunk_type: Type of chunk
+        - start_char: Starting character position
+        - end_char: Ending character position
+        - token_count: Approximate token count (chars / 4)
+    """
+    if not text or not text.strip():
+        logger.warning("Empty text provided for chunking")
+        return []
+    
+    text = text.strip()
+    chunks = []
+    start = 0
+    chunk_index = 0
+    
+    while start < len(text):
+        # Calculate end position for this chunk
+        end = start + chunk_size
+        
+        # If this is not the last chunk, try to break at sentence boundary
+        if end < len(text):
+            # Look for sentence endings within the next 50 characters
+            sentence_endings = ['. ', '! ', '? ', '\n\n', '\n']
+            best_break = end
+            
+            for i in range(min(end + 50, len(text)) - 1, end - 50, -1):
+                for ending in sentence_endings:
+                    if text[i:i+len(ending)] == ending:
+                        best_break = i + len(ending)
+                        break
+                if best_break != end:
+                    break
+            
+            end = best_break
+        else:
+            end = len(text)
+        
+        # Extract chunk text
+        chunk_text = text[start:end].strip()
+        
+        if chunk_text:  # Only add non-empty chunks
+            chunks.append({
+                "chunk_text": chunk_text,
+                "chunk_index": chunk_index,
+                "chunk_type": chunk_type,
+                "start_char": start,
+                "end_char": end,
+                "token_count": len(chunk_text) // 4  # Rough estimate: 1 token ≈ 4 chars
+            })
+            chunk_index += 1
+        
+        # Move start position with overlap
+        start = end - chunk_overlap
+        
+        # Avoid infinite loop if chunk is too small
+        if start >= len(text) or (end == len(text)):
+            break
+    
+    logger.info(
+        "Successfully chunked text: %d chars → %d chunks (type=%s, size=%d, overlap=%d)",
+        len(text), len(chunks), chunk_type, chunk_size, chunk_overlap
+    )
+    
+    return chunks
+
+
+def generate_chunk_embeddings(chunks: List[dict]) -> List[dict]:
+    """
+    Generate embeddings for a list of text chunks.
+    
+    Args:
+        chunks: List of chunk dictionaries from chunk_text()
+        
+    Returns:
+        List of chunk dictionaries with 'embedding' field added
+        Chunks that fail to generate embeddings will have embedding=None
+    """
+    if not chunks:
+        logger.warning("Empty chunks list provided for embedding generation")
+        return []
+    
+    result_chunks = []
+    
+    for i, chunk in enumerate(chunks):
+        chunk_copy = chunk.copy()
+        
+        # Generate embedding for this chunk
+        embedding = generate_document_embedding(chunk["chunk_text"])
+        chunk_copy["embedding"] = embedding
+        
+        result_chunks.append(chunk_copy)
+        
+        if (i + 1) % 10 == 0:
+            logger.info("Generated embeddings for %d/%d chunks", i + 1, len(chunks))
+    
+    successful = sum(1 for c in result_chunks if c["embedding"] is not None)
+    logger.info(
+        "Chunk embedding complete: %d/%d successful",
+        successful, len(chunks)
+    )
+    
+    return result_chunks

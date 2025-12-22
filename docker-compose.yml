@@ -16,7 +16,7 @@ services:
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
-      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-474001-842320946404.json
+      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-fb9f1d6b9381.json
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 

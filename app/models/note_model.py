@@ -12,8 +12,6 @@ class Note(Base):
     title = Column(String(200), nullable=False)
     content = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)  # AI-generated summary
-    content_embedding = Column(Vector(768), nullable=True)  # 768 Dimension Vector embedding
-    summary_embedding = Column(Vector(768), nullable=True)  # 768 Dimension Vector embedding
     
     # Categorization
     category = Column(String(50), default="general")  # meeting, lecture, personal, etc.
@@ -44,3 +42,4 @@ class Note(Base):
     # Relationships
     user = relationship("User", back_populates="notes")
     audio_file = relationship("AudioFile", back_populates="notes")
+    chunks = relationship("NoteChunk", back_populates="note", cascade="all, delete-orphan")

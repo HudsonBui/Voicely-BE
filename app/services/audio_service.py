@@ -9,8 +9,12 @@ import subprocess
 
 from app.models import AudioFile, User
 from app.schemas.audio import AudioFileCreate
-from app.common.command_message import CommonMessage
+from app.common.common_message import CommonMessage
 from app.common.response_common import ResponseCommon
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 class AudioService:
     def __init__(self):
@@ -31,6 +35,8 @@ class AudioService:
 
     def validate_audio_file(self, file: UploadFile) -> ResponseCommon:
         """Validate uploaded audio file"""
+
+        logger.info("Triggered Audio Validation Service ~ validate_audio_file")
         
         # Check file size
         if hasattr(file, 'size') and file.size > self.max_file_size:
@@ -52,10 +58,12 @@ class AudioService:
         # - Duration limits
         # - Sample rate checks
         
-        return ResponseCommon.success_response(message="File is valid")
+        return ResponseCommon.success_response()
 
     def save_uploaded_file(self, file: UploadFile, user: User) -> ResponseCommon:
         """Save uploaded file to disk and return file path and format"""
+        
+        logger.info("Triggered Audio Save Service ~ save_uploaded_file")
         
         # Generate unique filename
         file_extension = self.allowed_formats.get(file.content_type, 'unknown')
@@ -74,7 +82,7 @@ class AudioService:
         
         return ResponseCommon.success_response(
             code=status.HTTP_201_CREATED,
-            message="Audio file saved successfully",
+            message=CommonMessage.AUDIO_UPLOADED_SUCCESS,
             data={
                 "file_path": str(file_path),
                 "file_format": file_extension
@@ -156,7 +164,7 @@ class AudioService:
         
         return ResponseCommon.success_response(
             code=status.HTTP_201_CREATED,
-            message="Audio record created successfully",
+            message=CommonMessage.AUDIO_UPLOADED_SUCCESS,
             data=audio_file
         )
 
@@ -167,7 +175,7 @@ class AudioService:
         ).offset(skip).limit(limit).all()
         return ResponseCommon.success_response(
             data=audio_files,
-            message="Audio files retrieved successfully"
+            message=CommonMessage.AUDIO_LIST_RETRIEVED_SUCCESS
         )
 
     def get_audio_file_by_id(self, db: Session, audio_id: int, user: User) -> ResponseCommon:
@@ -185,7 +193,7 @@ class AudioService:
 
         return ResponseCommon.success_response(
             data=audio_file,
-            message="Audio file retrieved successfully"
+            message=CommonMessage.AUDIO_RETRIEVED_SUCCESS
         )
 
     def delete_audio_file(self, db: Session, audio_file: AudioFile) -> ResponseCommon:
@@ -199,12 +207,12 @@ class AudioService:
             db.delete(audio_file)
             db.commit()
             return ResponseCommon.success_response(
-                message="Audio file deleted successfully"
+                message=CommonMessage.AUDIO_DELETED_SUCCESS
             )
         except Exception:
             db.rollback()
             return ResponseCommon.error_response(
-                message="Failed to delete audio file",
+                message=CommonMessage.AUDIO_FILE_SAVE_FAILED,
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

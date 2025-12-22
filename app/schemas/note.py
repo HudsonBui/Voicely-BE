@@ -71,7 +71,7 @@ class SummarizeTranscriptRequest(BaseModel):
 
 class SummarizeTranscriptResponse(BaseModel):
     audio_file_id: int
-    summary_html: str
+    summary_json: str  # Quill Delta JSON format string
     note_id: int
     message: str
 

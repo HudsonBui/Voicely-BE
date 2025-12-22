@@ -25,7 +25,7 @@ except ImportError:
     AudioSegment = None
 
 from app.models import AudioFile
-from app.common.command_message import CommonMessage
+from app.common.common_message import CommonMessage
 from app.common.response_common import ResponseCommon
 
 logger = logging.getLogger(__name__)

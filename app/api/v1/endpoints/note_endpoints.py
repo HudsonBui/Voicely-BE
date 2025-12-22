@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import Optional
+import json
 
 from app.api.deps import get_db, get_current_active_user
 from app.models import User
-from app.common.command_message import CommonMessage
+from app.common.common_message import CommonMessage
 from app.schemas.note import (
     Note,
     NoteCreate,
@@ -33,7 +35,7 @@ from app.services.note_service import (
 router = APIRouter()
 
 
-@router.get("", response_model=NotesListResponse)
+@router.get("")
 async def list_notes(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
@@ -61,15 +63,16 @@ async def list_notes(
     )
     
     if not result.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(result.to_json()),
             status_code=result.code,
-            detail=result.message
+            media_type="application/json"
         )
     
-    return NotesListResponse(**result.data)
+    return result.to_json()
 
 
-@router.get("/categories", response_model=NoteCategoriesResponse)
+@router.get("/categories")
 async def list_categories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
@@ -79,28 +82,30 @@ async def list_categories(
     """
     categories_response = get_note_categories(db=db, user_id=current_user.id)
     if not categories_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(categories_response.to_json()),
             status_code=categories_response.code,
-            detail=categories_response.message
+            media_type="application/json"
         )
-    return NoteCategoriesResponse(categories=categories_response.data)
+    return categories_response.to_json()
 
 
-@router.get("/priorities", response_model=NotePrioritiesResponse)
+@router.get("/priorities")
 async def list_priorities():
     """
     Get list of available priority levels.
     """
     priorities_response = get_note_priorities()
     if not priorities_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(priorities_response.to_json()),
             status_code=priorities_response.code,
-            detail=priorities_response.message
+            media_type="application/json"
         )
-    return NotePrioritiesResponse(priorities=priorities_response.data)
+    return priorities_response.to_json()
 
 
-@router.get("/{note_id}", response_model=Note)
+@router.get("/{note_id}")
 async def get_note(
     note_id: int,
     db: Session = Depends(get_db),
@@ -111,14 +116,15 @@ async def get_note(
     """
     note_response = get_note_by_id(db=db, note_id=note_id, user_id=current_user.id)
     if not note_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(note_response.to_json()),
             status_code=note_response.code,
-            detail=note_response.message
+            media_type="application/json"
         )
-    return note_response.data
+    return note_response.to_json()
 
 
-@router.post("", response_model=NoteCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED)
 async def create_new_note(
     note_data: NoteCreate,
     db: Session = Depends(get_db),
@@ -136,18 +142,16 @@ async def create_new_note(
     )
     
     if not create_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(create_response.to_json()),
             status_code=create_response.code,
-            detail=create_response.message
+            media_type="application/json"
         )
 
-    return NoteCreateResponse(
-        message=create_response.message or "Note created successfully",
-        note=create_response.data
-    )
+    return create_response.to_json()
 
 
-@router.put("/{note_id}", response_model=Note)
+@router.put("/{note_id}")
 async def update_existing_note(
     note_id: int,
     update_data: NoteUpdate,
@@ -167,12 +171,13 @@ async def update_existing_note(
     )
     
     if not update_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(update_response.to_json()),
             status_code=update_response.code,
-            detail=update_response.message
+            media_type="application/json"
         )
     
-    return update_response.data
+    return update_response.to_json()
 
 
 @router.delete("/{note_id}", status_code=status.HTTP_200_OK)
@@ -186,14 +191,15 @@ async def delete_existing_note(
     """
     delete_response = delete_note(db=db, note_id=note_id, user_id=current_user.id)
     if not delete_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(delete_response.to_json()),
             status_code=delete_response.code,
-            detail=delete_response.message
+            media_type="application/json"
         )
-    return {"message": delete_response.message}
+    return delete_response.to_json()
 
 
-@router.post("/summarize-transcript", response_model=SummarizeTranscriptResponse)
+@router.post("/summarize-transcript")
 async def summarize_transcript(
     request: SummarizeTranscriptRequest,
     db: Session = Depends(get_db),
@@ -222,22 +228,16 @@ async def summarize_transcript(
     )
     
     if not result.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(result.to_json()),
             status_code=result.code,
-            detail=result.message
+            media_type="application/json"
         )
 
-    data = result.data or {}
-    
-    return SummarizeTranscriptResponse(
-        audio_file_id=data.get("audio_file_id"),
-        summary_html=data.get("summary_html", ""),
-        note_id=data.get("note_id"),
-        message=result.message or CommonMessage.SUMMARY_CREATED_SUCCESS
-    )
+    return result.to_json()
 
 
-@router.post("/semantic-search", response_model=SemanticSearchResponse)
+@router.post("/semantic-search")
 async def search_notes_by_semantic(
     request: SemanticSearchRequest,
     db: Session = Depends(get_db),
@@ -270,17 +270,10 @@ async def search_notes_by_semantic(
     )
     
     if not result.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(result.to_json()),
             status_code=result.code,
-            detail=result.message
+            media_type="application/json"
         )
     
-    data = result.data or {}
-    
-    return SemanticSearchResponse(
-        results=data.get("results", []),
-        total_count=data.get("total_count", 0),
-        query=data.get("query", ""),
-        search_in=data.get("search_in", "both"),
-        message=result.message or "Semantic search completed"
-    )
+    return result.to_json()

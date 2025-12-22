@@ -1,3 +1,4 @@
+# Python cache
 __pycache__
 *.pyc
 *.pyo
@@ -8,24 +9,45 @@ __pycache__
 *.egg-info
 dist
 build
+**/__pycache__/
+
+# Environments (local only)
 .env
 .venv
 venv/
 ENV/
+
+# Git
 .git
 .gitignore
+
+# Docker
+.docker
 .dockerignore
 docker-compose.yml
-README.md
-*.md
+docker-compose.*.yml
+
+# IDE
 .vscode
 .idea
-*.log
 .DS_Store
-tests/
+
+# Documentation
+README.md
+*.md
 docs/
+
+# Test and development files
+tests/
+
+# Logs
+*.log
+
+# Uploads (local data)
 uploads/
-alembic/
-migrations/
-*.json
-!requirements.txt
+
+# Unnecessary JSON credentials (production should use different auth)
+# Uncomment lines below if you don't want these in the image:
+# voicely-473515-17ba56fc6e39.json
+# voicely-474001-842320946404.json
+# voicely-be-fb9f1d6b9381.json

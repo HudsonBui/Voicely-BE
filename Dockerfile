@@ -28,16 +28,24 @@ RUN pip install -r /tmp/requirements.txt && \
 # 3. Copy code ứng dụng SAU KHI đã install
 # Thay đổi code ở đây sẽ không làm chạy lại pip install
 COPY ./app /code/app
+COPY ./alembic.ini /code/alembic.ini
+COPY ./alembic /code/alembic
 
 # Cài đặt user và quyền (Giữ nguyên, rất tốt!)
-RUN adduser \
+RUN addgroup --gid 1000 voicely-user && \
+    adduser \
     --disabled-password \
     --no-create-home \
+    --uid 1000 \
+    --gid 1000 \
     voicely-user && \
     mkdir -p /vol/web/media && \
     mkdir -p /vol/web/static && \
+    mkdir -p /code/uploads/audio && \
     chown -R voicely-user:voicely-user /vol && \
-    chmod -R 755 /vol
+    chown -R voicely-user:voicely-user /code/uploads && \
+    chmod -R 755 /vol && \
+    chmod -R 755 /code/uploads
 
 USER voicely-user
 

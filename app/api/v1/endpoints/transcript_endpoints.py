@@ -1,7 +1,9 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from datetime import datetime
+import json
 
 from app.api.deps import get_db, get_current_active_user
 from app.models import User
@@ -13,10 +15,12 @@ from app.schemas.transcript import (
 )
 from app.services.transcript_service import transcript_service
 from app.services.audio_service import audio_service
+from app.common.response_common import ResponseCommon
+from app.common.common_message import CommonMessage
 
 router = APIRouter()
 
-@router.post("/transcribe", response_model=TranscriptResponse)
+@router.post("/transcribe")
 async def transcribe_audio(
     request: TranscriptRequest,
     background_tasks: BackgroundTasks,
@@ -38,34 +42,44 @@ async def transcribe_audio(
     )
     
     if not audio_file_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(audio_file_response.to_json()),
             status_code=audio_file_response.code,
-            detail=audio_file_response.message
+            media_type="application/json"
         )
     
     audio_file = audio_file_response.data
     
     # Check if transcription service is available
     if not transcript_service.is_transcription_available():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Transcription service is not available. Please configure Google Cloud Speech API credentials."
+        error_response = ResponseCommon.error_response(
+            message="Transcription service is not available. Please configure Google Cloud Speech API credentials.",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+        return Response(
+            content=json.dumps(error_response.to_json()),
+            status_code=error_response.code,
+            media_type="application/json"
         )
     
     # Check if already transcribed
     if audio_file.transcription and audio_file.status == "completed":
         # Return existing transcription
-        return TranscriptResponse(
-            audio_id=audio_file.id,
-            transcript=audio_file.transcription,
-            confidence=audio_file.confidence_score or 0.0,
-            language_code=request.language_code,
-            segments=[],  # Segments not stored in basic version
-            word_count=len(audio_file.transcription.split()) if audio_file.transcription else 0,
-            duration_transcribed=audio_file.duration,
-            status=audio_file.status,
-            processed_at=audio_file.updated_at
+        response = ResponseCommon.success_response(
+            data={
+                "audio_id": audio_file.id,
+                "transcript": audio_file.transcription,
+                "confidence": audio_file.confidence_score or 0.0,
+                "language_code": request.language_code,
+                "segments": [],
+                "word_count": len(audio_file.transcription.split()) if audio_file.transcription else 0,
+                "duration_transcribed": audio_file.duration,
+                "status": audio_file.status,
+                "processed_at": audio_file.updated_at
+            },
+            message=CommonMessage.TRANSCRIPTION_ALREADY_EXISTS
         )
+        return response.to_json()
     
     try:
         # Update status to processing
@@ -80,18 +94,24 @@ async def transcribe_audio(
         if not transcription_response.success:
             audio_file.status = "failed"
             db.commit()
-            raise HTTPException(
+            return Response(
+                content=json.dumps(transcription_response.to_json()),
                 status_code=transcription_response.code,
-                detail=transcription_response.message
+                media_type="application/json"
             )
 
         transcription_result = transcription_response.data or {}
         if not transcription_result:
             audio_file.status = "failed"
             db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Transcription result is empty"
+            error_response = ResponseCommon.error_response(
+                message="Transcription result is empty",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            return Response(
+                content=json.dumps(error_response.to_json()),
+                status_code=error_response.code,
+                media_type="application/json"
             )
         
         # Update database with results
@@ -103,25 +123,30 @@ async def transcribe_audio(
         if not update_response.success:
             audio_file.status = "failed"
             db.commit()
-            raise HTTPException(
+            return Response(
+                content=json.dumps(update_response.to_json()),
                 status_code=update_response.code,
-                detail=update_response.message
+                media_type="application/json"
             )
 
         updated_audio_file = update_response.data
         
         # Return response
-        return TranscriptResponse(
-            audio_id=updated_audio_file.id,
-            transcript=transcription_result["transcript"],
-            confidence=transcription_result["confidence"],
-            language_code=request.language_code,
-            segments=transcription_result.get("segments", []),
-            word_count=transcription_result["word_count"],
-            duration_transcribed=transcription_result.get("duration_transcribed"),
-            status=transcription_result["status"],
-            processed_at=datetime.utcnow()
+        response = ResponseCommon.success_response(
+            data={
+                "audio_id": updated_audio_file.id,
+                "transcript": transcription_result["transcript"],
+                "confidence": transcription_result["confidence"],
+                "language_code": request.language_code,
+                "segments": transcription_result.get("segments", []),
+                "word_count": transcription_result["word_count"],
+                "duration_transcribed": transcription_result.get("duration_transcribed"),
+                "status": transcription_result["status"],
+                "processed_at": datetime.utcnow()
+            },
+            message=CommonMessage.TRANSCRIPTION_COMPLETED_SUCCESS
         )
+        return response.to_json()
         
     except HTTPException:
         # Re-raise HTTP exceptions
@@ -132,9 +157,14 @@ async def transcribe_audio(
         # Handle unexpected errors
         audio_file.status = "failed"
         db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Transcription failed: {str(e)}"
+        error_response = ResponseCommon.error_response(
+            message=f"Transcription failed: {str(e)}",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        return Response(
+            content=json.dumps(error_response.to_json()),
+            status_code=error_response.code,
+            media_type="application/json"
         )
 
 # @router.get("/status/{audio_id}", response_model=TranscriptStatus)
@@ -267,9 +297,10 @@ def delete_transcription(
     )
     
     if not audio_file_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(audio_file_response.to_json()),
             status_code=audio_file_response.code,
-            detail=audio_file_response.message
+            media_type="application/json"
         )
     
     audio_file = audio_file_response.data
@@ -282,13 +313,21 @@ def delete_transcription(
         
         db.commit()
         
-        return {"message": "Transcription deleted successfully"}
+        response = ResponseCommon.success_response(
+            message=CommonMessage.TRANSCRIPTION_DELETED_SUCCESS
+        )
+        return response.to_json()
         
     except Exception as e:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete transcription: {str(e)}"
+        error_response = ResponseCommon.error_response(
+            message=f"Failed to delete transcription: {str(e)}",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+        return Response(
+            content=json.dumps(error_response.to_json()),
+            status_code=error_response.code,
+            media_type="application/json"
         )
 
 @router.get("/check/{audio_id}")
@@ -308,20 +347,25 @@ def check_transcription_compatibility(
     )
     
     if not audio_file_response.success:
-        raise HTTPException(
+        return Response(
+            content=json.dumps(audio_file_response.to_json()),
             status_code=audio_file_response.code,
-            detail=audio_file_response.message
+            media_type="application/json"
         )
     
     audio_file = audio_file_response.data
     
     # Check if transcription service is available
     if not transcript_service.is_transcription_available():
-        return {
-            "can_transcribe": False,
-            "reason": "Google Cloud Speech API not configured",
-            "recommendation": "Configure GOOGLE_APPLICATION_CREDENTIALS in environment"
-        }
+        response = ResponseCommon.success_response(
+            data={
+                "can_transcribe": False,
+                "reason": "Google Cloud Speech API not configured",
+                "recommendation": "Configure GOOGLE_APPLICATION_CREDENTIALS in environment"
+            },
+            message=CommonMessage.TRANSCRIPTION_SERVICE_UNAVAILABLE
+        )
+        return response.to_json()
     
     # Check file constraints
     file_size = 0
@@ -339,44 +383,60 @@ def check_transcription_compatibility(
     gcs_available = transcript_service.is_gcs_available()
     
     if duration <= max_duration_simple and file_size <= max_size_simple:
-        return {
-            "can_transcribe": True,
-            "method": "synchronous",
-            "file_size_mb": round(file_size / 1024 / 1024, 2),
-            "duration_seconds": duration,
-            "recommendation": "File is compatible with direct synchronous transcription"
-        }
-    elif duration > max_duration_simple and file_size <= max_size_direct_long:
-        return {
-            "can_transcribe": True,
-            "method": "asynchronous_direct",
-            "file_size_mb": round(file_size / 1024 / 1024, 2),
-            "duration_seconds": duration,
-            "recommendation": "File will use asynchronous transcription with direct upload"
-        }
-    elif gcs_available:
-        return {
-            "can_transcribe": True,
-            "method": "asynchronous_gcs",
-            "file_size_mb": round(file_size / 1024 / 1024, 2),
-            "duration_seconds": duration,
-            "recommendation": "File will be uploaded to Google Cloud Storage for transcription",
-            "gcs_bucket": transcript_service.gcs_bucket_name
-        }
-    else:
-        return {
-            "can_transcribe": False,
-            "reason": f"File too large ({file_size / 1024 / 1024:.1f}MB) or too long ({duration:.1f}s) and GCS not configured",
-            "file_size_mb": round(file_size / 1024 / 1024, 2),
-            "duration_seconds": duration,
-            "recommendation": "Configure GCS_BUCKET_NAME environment variable for large files, or use smaller files (<1MB, <60s)",
-            "limits": {
-                "max_size_simple_mb": max_size_simple / 1024 / 1024,
-                "max_size_direct_long_mb": max_size_direct_long / 1024 / 1024,
-                "max_duration_simple_seconds": max_duration_simple
+        response = ResponseCommon.success_response(
+            data={
+                "can_transcribe": True,
+                "method": "synchronous",
+                "file_size_mb": round(file_size / 1024 / 1024, 2),
+                "duration_seconds": duration,
+                "recommendation": "File is compatible with direct synchronous transcription"
             },
-            "gcs_available": gcs_available
-        }
+            message=CommonMessage.TRANSCRIPTION_CHECK_COMPLETED
+        )
+        return response.to_json()
+    elif duration > max_duration_simple and file_size <= max_size_direct_long:
+        response = ResponseCommon.success_response(
+            data={
+                "can_transcribe": True,
+                "method": "asynchronous_direct",
+                "file_size_mb": round(file_size / 1024 / 1024, 2),
+                "duration_seconds": duration,
+                "recommendation": "File will use asynchronous transcription with direct upload"
+            },
+            message=CommonMessage.TRANSCRIPTION_CHECK_COMPLETED
+        )
+        return response.to_json()
+    elif gcs_available:
+        response = ResponseCommon.success_response(
+            data={
+                "can_transcribe": True,
+                "method": "asynchronous_gcs",
+                "file_size_mb": round(file_size / 1024 / 1024, 2),
+                "duration_seconds": duration,
+                "recommendation": "File will be uploaded to Google Cloud Storage for transcription",
+                "gcs_bucket": transcript_service.gcs_bucket_name
+            },
+            message=CommonMessage.TRANSCRIPTION_CHECK_COMPLETED
+        )
+        return response.to_json()
+    else:
+        response = ResponseCommon.error_response(
+            data={
+                "can_transcribe": False,
+                "reason": f"File too large ({file_size / 1024 / 1024:.1f}MB) or too long ({duration:.1f}s) and GCS not configured",
+                "file_size_mb": round(file_size / 1024 / 1024, 2),
+                "duration_seconds": duration,
+                "recommendation": "Configure GCS_BUCKET_NAME environment variable for large files, or use smaller files (<1MB, <60s)",
+                "limits": {
+                    "max_size_simple_mb": max_size_simple / 1024 / 1024,
+                    "max_size_direct_long_mb": max_size_direct_long / 1024 / 1024,
+                    "max_duration_simple_seconds": max_duration_simple
+                },
+                "gcs_available": gcs_available
+            },
+            message=CommonMessage.TRANSCRIPTION_GCS_REQUIRED
+        )
+        return response.to_json()
 
 @router.get("/health")
 def transcription_health_check():
@@ -416,4 +476,8 @@ def transcription_health_check():
         health_status["capabilities"] = []
         health_status["limitations"] = ["transcription_not_configured"]
     
-    return health_status
+    response = ResponseCommon.success_response(
+        data=health_status,
+        message=CommonMessage.HEALTH_CHECK_COMPLETED
+    )
+    return response.to_json()
