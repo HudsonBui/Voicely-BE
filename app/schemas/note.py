@@ -71,6 +71,27 @@ class SummarizeTranscriptRequest(BaseModel):
 
 class SummarizeTranscriptResponse(BaseModel):
     audio_file_id: int
-    summary_html: str
+    summary_json: str  # Quill Delta JSON format string
     note_id: int
+    message: str
+
+
+# Semantic search request/response
+class SemanticSearchRequest(BaseModel):
+    query: str
+    limit: Optional[int] = 10
+    search_in: Optional[str] = "both"  # "content", "summary", or "both"
+    similarity_threshold: Optional[float] = 0.5
+
+
+class NoteWithSimilarity(BaseModel):
+    note: Note
+    similarity_score: float
+
+
+class SemanticSearchResponse(BaseModel):
+    results: List[NoteWithSimilarity]
+    total_count: int
+    query: str
+    search_in: str
     message: str

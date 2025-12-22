@@ -1,4 +1,5 @@
 from app.models.base_import import Base, Column, Integer, String, Boolean, DateTime, datetime, timezone, Text, Float, ForeignKey, relationship
+from pgvector.sqlalchemy import Vector
 
 class Note(Base):
     __tablename__ = "notes"
@@ -41,3 +42,4 @@ class Note(Base):
     # Relationships
     user = relationship("User", back_populates="notes")
     audio_file = relationship("AudioFile", back_populates="notes")
+    chunks = relationship("NoteChunk", back_populates="note", cascade="all, delete-orphan")

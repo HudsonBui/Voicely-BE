@@ -18,3 +18,4 @@ class User(Base):
     # Relationships
     audio_files = relationship("AudioFile", back_populates="user")
     notes = relationship("Note", back_populates="user")
+    task_jobs = relationship("TaskJob", back_populates="user")

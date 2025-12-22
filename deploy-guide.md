@@ -32,16 +32,28 @@ JWT_REFRESH_SECRET_KEY=your_refresh_secret_key_min_32_chars
 **Option A: Upload trực tiếp qua rsync/scp**
 ```bash
 # Nén toàn bộ project (loại trừ file không cần thiết)
+# tar --exclude='__pycache__' \
+#     --exclude='*.pyc' \
+#     --exclude='.git' \
+#     --exclude='venv' \
+#     --exclude='uploads' \
+#     --exclude='tests' \
+#     -czf voicely-be.tar.gz .
+
+# From AIRecorder directory
 tar --exclude='__pycache__' \
     --exclude='*.pyc' \
     --exclude='.git' \
     --exclude='venv' \
     --exclude='uploads' \
     --exclude='tests' \
-    -czf voicely-be.tar.gz .
+    -czf voicely-be.tar.gz Voicely-BE/
+
+# Sau đó copy thư mục rar rồi bỏ vào Voicely-BE
 
 # Upload lên server
-scp voicely-be.tar.gz user@your-server-ip:/home/user/
+# scp voicely-be.tar.gz user@your-server-ip:/home/user/
+scp -P 10004 voicely-be.tar.gz root@31.192.234.183:/root/
 
 # SSH vào server và giải nén
 ssh user@your-server-ip
