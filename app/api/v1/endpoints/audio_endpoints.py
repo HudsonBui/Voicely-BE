@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import List
@@ -8,6 +8,7 @@ from app.api.deps import get_db, get_current_active_user
 from app.models import User
 from app.schemas.audio import AudioFile as AudioFileSchema, AudioUploadResponse
 from app.services.audio_service import audio_service
+from app.services.task_job_service import task_job_service
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("audio_endpoints")
@@ -82,6 +83,89 @@ async def upload_audio_file(
             content=json.dumps(error_response.to_json()),
             status_code=error_response.code,
             media_type="application/json"
+        )
+
+@router.post("/upload-async")
+async def upload_audio_file_async(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Upload audio file with async processing.
+    Returns job_id immediately for status polling.
+    """
+    logger.info("Triggered endpoint: audio/upload-async")
+
+    validation_result = audio_service.validate_audio_file(file)
+    if not validation_result.success:
+        return Response(
+            content=json.dumps(validation_result.to_json()),
+            status_code=validation_result.code,
+            media_type="application/json",
+        )
+
+    try:
+        save_result = audio_service.save_uploaded_file(file, current_user)
+        if not save_result.success:
+            logger.error("Failed to save uploaded file: %s", save_result.message)
+            return Response(
+                content=json.dumps(save_result.to_json()),
+                status_code=save_result.code,
+                media_type="application/json",
+            )
+
+        file_path = save_result.data["file_path"]
+        file_format = save_result.data["file_format"]
+
+        create_result = audio_service.create_audio_record(
+            db=db,
+            file=file,
+            user=current_user,
+            file_path=file_path,
+            file_format=file_format,
+        )
+        if not create_result.success:
+            logger.error("Failed to create audio record in DB: %s", create_result.message)
+            return Response(
+                content=json.dumps(create_result.to_json()),
+                status_code=create_result.code,
+                media_type="application/json",
+            )
+
+        audio_file = create_result.data
+        file_info = {
+            "file_path": file_path,
+            "file_format": file_format,
+            "file_name": file.filename,
+        }
+
+        result = await task_job_service.create_and_queue_job(
+            request=request,
+            db=db,
+            task_type="upload",
+            task_function="handle_audio_upload",
+            user_id=current_user.id,
+            audio_id=audio_file.id,
+            file_info=file_info,
+        )
+
+        return result.to_json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Exception during async audio upload processing: %s", str(exc))
+        from app.common.response_common import ResponseCommon
+
+        error_response = ResponseCommon.error_response(
+            message=f"Failed to process async audio upload: {str(exc)}",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        return Response(
+            content=json.dumps(error_response.to_json()),
+            status_code=error_response.code,
+            media_type="application/json",
         )
 
 @router.get("/files")

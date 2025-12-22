@@ -11,15 +11,41 @@ services:
       - .env
     depends_on:
       - db
+      - redis
     environment:
       DB_HOST: db
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-fb9f1d6b9381.json
     restart: unless-stopped
     command: >
       uvicorn app.main:app --host 0.0.0.0 --port 8800
+
+  worker:
+    build: .
+    container_name: voicely_worker
+    volumes:
+      - ./voicely-be-fb9f1d6b9381.json:/code/voicely-be-fb9f1d6b9381.json:ro
+      - uploads-data:/code/uploads
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    environment:
+      DB_HOST: db
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-fb9f1d6b9381.json
+    restart: unless-stopped
+    command: >
+      arq app.worker.WorkerSettings
 
   db:
     image: pgvector/pgvector:pg15
@@ -34,6 +60,17 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    container_name: voicely_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
 volumes:
   pgdata:
   uploads-data:
+  redis-data:

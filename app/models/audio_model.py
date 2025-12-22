@@ -30,3 +30,4 @@ class AudioFile(Base):
     # Relationships
     user = relationship("User", back_populates="audio_files")
     notes = relationship("Note", back_populates="audio_file")
+    task_jobs = relationship("TaskJob", back_populates="audio_file")

@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -15,6 +15,7 @@ from app.schemas.transcript import (
 )
 from app.services.transcript_service import transcript_service
 from app.services.audio_service import audio_service
+from app.services.task_job_service import task_job_service
 from app.common.response_common import ResponseCommon
 from app.common.common_message import CommonMessage
 
@@ -166,6 +167,53 @@ async def transcribe_audio(
             status_code=error_response.code,
             media_type="application/json"
         )
+
+@router.post("/transcribe-async")
+async def transcribe_audio_async(
+    request: Request,
+    transcript_request: TranscriptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Transcribe audio asynchronously.
+    Returns job_id for status polling.
+    """
+    audio_file_response = audio_service.get_audio_file_by_id(
+        db=db,
+        audio_id=transcript_request.audio_id,
+        user=current_user,
+    )
+
+    if not audio_file_response.success:
+        return Response(
+            content=json.dumps(audio_file_response.to_json()),
+            status_code=audio_file_response.code,
+            media_type="application/json",
+        )
+
+    if not transcript_service.is_transcription_available():
+        error_response = ResponseCommon.error_response(
+            message="Transcription service is not available. Please configure Google Cloud Speech API credentials.",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        return Response(
+            content=json.dumps(error_response.to_json()),
+            status_code=error_response.code,
+            media_type="application/json",
+        )
+
+    result = await task_job_service.create_and_queue_job(
+        request=request,
+        db=db,
+        task_type="transcribe",
+        task_function="handle_transcription",
+        user_id=current_user.id,
+        audio_id=transcript_request.audio_id,
+        language_code=transcript_request.language_code,
+    )
+
+    return result.to_json()
 
 # @router.get("/status/{audio_id}", response_model=TranscriptStatus)
 # def get_transcription_status(

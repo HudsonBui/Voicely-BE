@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -31,6 +31,7 @@ from app.services.note_service import (
     get_note_priorities,
     semantic_search_notes
 )
+from app.services.task_job_service import task_job_service
 
 router = APIRouter()
 
@@ -233,6 +234,29 @@ async def summarize_transcript(
             status_code=result.code,
             media_type="application/json"
         )
+
+    return result.to_json()
+
+
+@router.post("/summarize-transcript-async")
+async def summarize_transcript_async(
+    request: Request,
+    summarize_request: SummarizeTranscriptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Summarize audio transcript asynchronously.
+    Returns job_id for status polling.
+    """
+    result = await task_job_service.create_and_queue_job(
+        request=request,
+        db=db,
+        task_type="summarize",
+        task_function="handle_summarization",
+        user_id=current_user.id,
+        audio_id=summarize_request.audio_file_id,
+    )
 
     return result.to_json()
 

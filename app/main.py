@@ -5,6 +5,8 @@ import time
 import logging
 
 from app.api.v1.router import api_router
+from arq import create_pool
+from app.core.redis_config import REDIS_SETTINGS
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -26,7 +28,7 @@ app.include_router(api_router)
 async def startup_event():
     """Create database tables on startup with retry logic"""
     from app.db.session import engine
-    from app.models import User, AudioFile
+    from app.models import User, AudioFile, TaskJob
     
     max_retries = 5
     retry_delay = 2
@@ -44,6 +46,14 @@ async def startup_event():
             else:
                 logging.error("Failed to connect to database after all retries")
                 raise
+
+    app.state.arq_pool = await create_pool(REDIS_SETTINGS)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    if hasattr(app.state, "arq_pool"):
+        await app.state.arq_pool.close()
 
 # @app.get("/")
 # async def root():
