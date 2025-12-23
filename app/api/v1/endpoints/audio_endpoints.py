@@ -25,7 +25,7 @@ async def upload_audio_file(
     Upload an audio file for the authenticated user.
     
     Supported formats: WAV, MP3, M4A, AAC, FLAC, OGG
-    Maximum file size: 50MB
+    Maximum file size: 200MB
     """
     logger.info('Triggered endpoint: audio/upload')
     

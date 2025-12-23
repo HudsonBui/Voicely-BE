@@ -7,6 +7,8 @@ import logging
 from app.api.v1.router import api_router
 from arq import create_pool
 from app.core.redis_config import REDIS_SETTINGS
+from app.socket_manager import sio
+import socketio
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -28,7 +30,7 @@ app.include_router(api_router)
 async def startup_event():
     """Create database tables on startup with retry logic"""
     from app.db.session import engine
-    from app.models import User, AudioFile, TaskJob
+    from app.models import User, AudioFile, TaskJob, ChatbotSession, ChatbotMessage
     
     max_retries = 5
     retry_delay = 2
@@ -54,6 +56,9 @@ async def startup_event():
 async def shutdown_event():
     if hasattr(app.state, "arq_pool"):
         await app.state.arq_pool.close()
+
+
+sio_app = socketio.ASGIApp(sio, other_asgi_app=app)
 
 # @app.get("/")
 # async def root():

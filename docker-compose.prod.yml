@@ -22,7 +22,7 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-fb9f1d6b9381.json
     restart: unless-stopped
     command: >
-      uvicorn app.main:app --host 0.0.0.0 --port 8800
+      uvicorn app.main:sio_app --host 0.0.0.0 --port 8800
 
   worker:
     build: .

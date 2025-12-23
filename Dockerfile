@@ -52,4 +52,4 @@ USER voicely-user
 # 4. Xóa `EXPOSE 8000` (không cần thiết cho Cloud Run)
 
 # 5. Sửa CMD sang "shell form" để $PORT hoạt động
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT
+CMD uvicorn app.main:sio_app --host 0.0.0.0 --port $PORT

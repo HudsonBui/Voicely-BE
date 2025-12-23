@@ -23,7 +23,7 @@ class TaskJobService:
         **kwargs,
     ) -> ResponseCommon:
         """Create a task job record and enqueue it to the ARQ worker."""
-        if not hasattr(request.app.state, "arq_pool"):
+        if request is None or not hasattr(request.app.state, "arq_pool"):
             return ResponseCommon.error_response(
                 message="ARQ pool not initialized",
                 code=500,
