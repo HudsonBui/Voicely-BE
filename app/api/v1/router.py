@@ -7,6 +7,7 @@ from app.api.v1.endpoints import (
     transcript_endpoints,
     note_endpoints,
     task_endpoints,
+    chatbot_endpoints,
 )
 
 api_router = APIRouter()
@@ -17,3 +18,4 @@ api_router.include_router(audio_endpoints.router, prefix="/audio", tags=["audio"
 api_router.include_router(transcript_endpoints.router, prefix="/transcript", tags=["transcription"])
 api_router.include_router(note_endpoints.router, prefix="/notes", tags=["notes"])
 api_router.include_router(task_endpoints.router, prefix="/tasks", tags=["tasks"])
+api_router.include_router(chatbot_endpoints.router, prefix="/chatbot", tags=["chatbot"])

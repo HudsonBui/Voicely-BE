@@ -194,6 +194,52 @@ async def handle_summarization(ctx, job_id: str, audio_id: int, user_id: int):
         db.close()
 
 
+async def handle_chatbot_message(
+    ctx,
+    job_id: str,
+    session_id: str,
+    message: str,
+    user_id: int,
+):
+    """Background task for processing chatbot messages."""
+    db: Session = SessionLocal()
+    job_record = None
+    try:
+        logger.info("Starting chatbot processing for job: %s", job_id)
+
+        job_record = db.query(TaskJob).filter(TaskJob.id == job_id).first()
+        if not job_record:
+            logger.error("Job %s not found in database", job_id)
+            return
+
+        job_record.status = "processing"
+        db.commit()
+
+        from app.services.chatbot_service import chatbot_service
+
+        result = await chatbot_service.process_message(
+            db=db,
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+        )
+
+        job_record.status = "completed"
+        job_record.result = json.dumps(result, ensure_ascii=False)
+        db.commit()
+
+        logger.info("Completed chatbot processing for job: %s", job_id)
+    except Exception as exc:
+        logger.error("Error processing chatbot job %s: %s", job_id, str(exc))
+        db.rollback()
+        if job_record:
+            job_record.status = "failed"
+            job_record.error_message = str(exc)
+            db.commit()
+    finally:
+        db.close()
+
+
 class WorkerSettings:
     """ARQ Worker configuration."""
 
@@ -201,6 +247,7 @@ class WorkerSettings:
         handle_audio_upload,
         handle_transcription,
         handle_summarization,
+        handle_chatbot_message,
     ]
     redis_settings = REDIS_SETTINGS
     max_jobs = 10

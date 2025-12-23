@@ -31,7 +31,7 @@ class AudioService:
             'audio/flac': 'flac',
             'audio/ogg': 'ogg'
         }
-        self.max_file_size = 70 * 1024 * 1024  # 70MB limit
+        self.max_file_size = 200 * 1024 * 1024  # 200MB limit
 
     def validate_audio_file(self, file: UploadFile) -> ResponseCommon:
         """Validate uploaded audio file"""
