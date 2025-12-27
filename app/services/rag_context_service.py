@@ -3,7 +3,8 @@ import logging
 from typing import Optional
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, cast
+from pgvector.sqlalchemy import Vector
 
 from app.models.note_chunk_model import NoteChunk
 from app.models.note_model import Note
@@ -58,8 +59,11 @@ class RAGContextService:
             pattern = f"%{' '.join(keywords)}%"
             query_obj = query_obj.filter(NoteChunk.chunk_text.ilike(pattern))
 
+        # Cast embedding to vector type for pgvector cosine_distance function
+        embedding_vector = cast(query_embedding, Vector(768))
+        
         chunks = (
-            query_obj.order_by(func.cosine_distance(NoteChunk.embedding, query_embedding))
+            query_obj.order_by(func.cosine_distance(NoteChunk.embedding, embedding_vector))
             .limit(limit)
             .all()
         )

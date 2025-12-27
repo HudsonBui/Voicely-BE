@@ -107,8 +107,8 @@ class TranscriptionConfig:
     DEFAULT_ENCODING = "LINEAR16"
     
     # Timeout settings
-    LONG_RUNNING_TIMEOUT = 900  # 15 minutes
-    GCS_TRANSCRIPTION_TIMEOUT = 900  # 15 minutes
+    LONG_RUNNING_TIMEOUT = 7200  # 120 minutes
+    GCS_TRANSCRIPTION_TIMEOUT = 7200  # 120 minutes
 
 
 class AudioConfig:

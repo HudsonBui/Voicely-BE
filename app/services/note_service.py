@@ -3,14 +3,18 @@ from typing import Optional
 from google import genai
 from google.genai import types
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
+from sqlalchemy import or_, cast, func
+from pgvector.sqlalchemy import Vector
 from fastapi import status
 import logging
 
 from app.common.common_message import CommonMessage
 from app.common.constants import AIPrompts
+from app.common.pagination_utils import PaginationHelper
 from app.models import AudioFile, Note, NoteChunk
 from app.common.response_common import ResponseCommon
+from app.schemas.note import Note as NoteSchema, NoteSearchDto
+from app.schemas.pagination import PageDto, SortOrder
 from app.services.embedding_service import (
     chunk_text, 
     generate_chunk_embeddings, 
@@ -55,15 +59,29 @@ def summarize_audio_transcript(
     
     try:
         user_prompt = AIPrompts.SUMMARY_USER_PROMPT.format(content=audio_file.transcription)
-        
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=AIPrompts.SUMMARY_SYSTEM_PROMPT,
-                temperature=0.7,
+
+        timeout_seconds = int(os.getenv("SUMMARY_TIMEOUT_SECONDS", "7200"))
+        request_options = {"timeout": timeout_seconds}
+
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=AIPrompts.SUMMARY_SYSTEM_PROMPT,
+                    temperature=0.7,
+                ),
+                request_options=request_options,
             )
-        )
+        except TypeError:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=AIPrompts.SUMMARY_SYSTEM_PROMPT,
+                    temperature=0.7,
+                ),
+            )
 
         logger.info("🚀 ~ NoteService ~ summarize_audio_transcript ~ generated summary for audio_file_id=%s", audio_file_id)
         
@@ -117,8 +135,8 @@ def summarize_audio_transcript(
         if audio_file.transcription:
             content_chunks = chunk_text(
                 audio_file.transcription,
-                chunk_size=500,
-                chunk_overlap=100,
+                chunk_size=1500,  # Increased from 500 to reduce API calls
+                chunk_overlap=200,  # Increased proportionally
                 chunk_type="content"
             )
             
@@ -146,8 +164,8 @@ def summarize_audio_transcript(
         if summary_json:
             summary_chunks = chunk_text(
                 summary_json,
-                chunk_size=500,
-                chunk_overlap=100,
+                chunk_size=1500,  # Increased from 500 to reduce API calls
+                chunk_overlap=200,  # Increased proportionally
                 chunk_type="summary"
             )
             
@@ -181,7 +199,7 @@ def summarize_audio_transcript(
             message=CommonMessage.SUMMARY_CREATED_SUCCESS,
             data={
                 "audio_file_id": audio_file_id,
-                "summary_json": summary_json,  # Return Quill Delta JSON string
+                "summary_json": summary_delta,  # Return the object (list), not the string
                 "note_id": note.id
             }
         )
@@ -195,6 +213,73 @@ def summarize_audio_transcript(
         )
 
 
+
+
+def search_notes(db: Session, user_id: int, search_dto: NoteSearchDto) -> PageDto[NoteSchema]:
+    """
+    Search and filter notes with pagination
+
+    Args:
+        db: Database session
+        user_id: Current user ID
+        search_dto: Search filters and pagination options
+
+    Returns:
+        PageDto with notes and pagination metadata
+    """
+    query = db.query(Note).filter(Note.user_id == user_id)
+
+    if search_dto.search:
+        search_term = f"%{search_dto.search}%"
+        query = query.filter(
+            or_(
+                Note.title.ilike(search_term),
+                Note.content.ilike(search_term),
+                Note.summary.ilike(search_term),
+                Note.tags.ilike(search_term),
+            )
+        )
+
+    if search_dto.category is not None:
+        query = query.filter(Note.category == search_dto.category)
+
+    if search_dto.priority is not None:
+        query = query.filter(Note.priority == search_dto.priority)
+
+    if search_dto.is_favorite is not None:
+        query = query.filter(Note.is_favorite == search_dto.is_favorite)
+
+    if search_dto.is_archived is not None:
+        query = query.filter(Note.is_archived == search_dto.is_archived)
+    else:
+        query = query.filter(Note.is_archived == False)
+
+    if search_dto.is_shared is not None:
+        query = query.filter(Note.is_shared == search_dto.is_shared)
+
+    if search_dto.audio_file_id is not None:
+        query = query.filter(Note.audio_file_id == search_dto.audio_file_id)
+
+    if search_dto.tags:
+        query = query.filter(Note.tags.ilike(f"%{search_dto.tags}%"))
+
+    if search_dto.from_date:
+        query = query.filter(Note.created_at >= search_dto.from_date)
+
+    if search_dto.to_date:
+        query = query.filter(Note.created_at <= search_dto.to_date)
+
+    order_value = getattr(search_dto.order, "value", search_dto.order)
+    if str(order_value).upper() == SortOrder.ASC.value:
+        query = query.order_by(Note.updated_at.asc())
+    else:
+        query = query.order_by(Note.updated_at.desc())
+
+    return PaginationHelper.paginate_query(
+        query=query,
+        page_options=search_dto,
+        response_model=NoteSchema,
+    )
 
 
 def get_notes_list(
@@ -223,44 +308,24 @@ def get_notes_list(
     Returns:
         Dictionary with notes list and pagination info
     """
-    query = db.query(Note).filter(Note.user_id == user_id)
-    
-    # Apply filters
-    if category:
-        query = query.filter(Note.category == category)
-    
-    if is_favorite is not None:
-        query = query.filter(Note.is_favorite == is_favorite)
-    
-    if is_archived is not None:
-        query = query.filter(Note.is_archived == is_archived)
-    else:
-        # Default: don't show archived notes unless explicitly requested
-        query = query.filter(Note.is_archived == False)
-    
-    if search:
-        search_pattern = f"%{search}%"
-        query = query.filter(
-            or_(
-                Note.title.ilike(search_pattern),
-                Note.content.ilike(search_pattern),
-                Note.summary.ilike(search_pattern),
-                Note.tags.ilike(search_pattern)
-            )
-        )
-    
-    # Get total count
-    total_count = query.count()
-    
-    # Get paginated results
-    notes = query.order_by(desc(Note.updated_at)).offset(skip).limit(limit).all()
-    
+    page = (skip // limit) + 1 if limit > 0 else 1
+    search_dto = NoteSearchDto(
+        page=page,
+        page_size=limit,
+        order=SortOrder.DESC,
+        search=search,
+        category=category,
+        is_favorite=is_favorite,
+        is_archived=is_archived,
+    )
+    paginated = search_notes(db=db, user_id=user_id, search_dto=search_dto)
+
     return ResponseCommon.success_response(
         data={
-            "notes": notes,
-            "total_count": total_count,
-            "page": (skip // limit) + 1 if limit > 0 else 1,
-            "page_size": limit
+            "notes": paginated.data,
+            "total_count": paginated.meta.item_count,
+            "page": paginated.meta.page,
+            "page_size": paginated.meta.page_size,
         },
         message=CommonMessage.NOTES_LIST_RETRIEVED_SUCCESS
     )
@@ -292,8 +357,11 @@ def get_note_by_id(db: Session, note_id: int, user_id: int) -> ResponseCommon:
             code=status.HTTP_404_NOT_FOUND
         )
     
+    # Convert to schema to trigger validators
+    note_schema = NoteSchema.model_validate(note)
+    
     return ResponseCommon.success_response(
-        data=note,
+        data=note_schema,
         message=CommonMessage.NOTE_RETRIEVED_SUCCESS
     )
 
@@ -340,8 +408,8 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
         if note_data.get("content"):
             content_chunks = chunk_text(
                 note_data["content"],
-                chunk_size=500,
-                chunk_overlap=100,
+                chunk_size=1500,
+                chunk_overlap=200,
                 chunk_type="content"
             )
             
@@ -368,8 +436,8 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
         if note_data.get("summary"):
             summary_chunks = chunk_text(
                 note_data["summary"],
-                chunk_size=500,
-                chunk_overlap=100,
+                chunk_size=1500,
+                chunk_overlap=200,
                 chunk_type="summary"
             )
             
@@ -396,9 +464,10 @@ def create_note(db: Session, user_id: int, note_data: dict) -> ResponseCommon:
         db.refresh(note)
         
         logger.info("Created note %s for user %s", note.id, user_id)
+        note_schema = NoteSchema.model_validate(note)
         return ResponseCommon.success_response(
             code=status.HTTP_201_CREATED,
-            data=note,
+            data=note_schema,
             message=CommonMessage.NOTE_CREATED_SUCCESS
         )
         
@@ -427,11 +496,17 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
     Raises:
         HTTPException: If note not found or update fails
     """
-    note_response = get_note_by_id(db, note_id, user_id)
-    if not note_response.success:
-        return note_response
-
-    note = note_response.data
+    # Query the database directly to get the SQLAlchemy model (not the Pydantic schema)
+    note = db.query(Note).filter(
+        Note.id == note_id,
+        Note.user_id == user_id
+    ).first()
+    
+    if not note:
+        return ResponseCommon.error_response(
+            message=CommonMessage.NOTE_NOT_FOUND,
+            code=status.HTTP_404_NOT_FOUND
+        )
     
     try:
         # Generate new chunks with embeddings if content or summary is updated
@@ -445,8 +520,8 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
             # Create new content chunks
             content_chunks = chunk_text(
                 update_data["content"],
-                chunk_size=500,
-                chunk_overlap=100,
+                chunk_size=1500,
+                chunk_overlap=200,
                 chunk_type="content"
             )
             
@@ -479,8 +554,8 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
             # Create new summary chunks
             summary_chunks = chunk_text(
                 update_data["summary"],
-                chunk_size=500,
-                chunk_overlap=100,
+                chunk_size=1500,
+                chunk_overlap=200,
                 chunk_type="summary"
             )
             
@@ -512,8 +587,9 @@ def update_note(db: Session, note_id: int, user_id: int, update_data: dict) -> R
         db.refresh(note)
         
         logger.info("Updated note %s", note_id)
+        note_schema = NoteSchema.model_validate(note)
         return ResponseCommon.success_response(
-            data=note,
+            data=note_schema,
             message=CommonMessage.NOTE_UPDATED_SUCCESS
         )
         
@@ -541,11 +617,17 @@ def delete_note(db: Session, note_id: int, user_id: int) -> ResponseCommon:
     Raises:
         HTTPException: If note not found or deletion fails
     """
-    note_response = get_note_by_id(db, note_id, user_id)
-    if not note_response.success:
-        return note_response
-
-    note = note_response.data
+    # Query the database directly to get the SQLAlchemy model (not the Pydantic schema)
+    note = db.query(Note).filter(
+        Note.id == note_id,
+        Note.user_id == user_id
+    ).first()
+    
+    if not note:
+        return ResponseCommon.error_response(
+            message=CommonMessage.NOTE_NOT_FOUND,
+            code=status.HTTP_404_NOT_FOUND
+        )
     
     try:
         db.delete(note)
@@ -623,8 +705,6 @@ def semantic_search_notes(
     Returns:
         List of notes with similarity scores, ordered by relevance
     """
-    from sqlalchemy import func
-    
     # Generate query embedding
     query_embedding = generate_query_embedding(query)
     
@@ -635,10 +715,13 @@ def semantic_search_notes(
         )
     
     try:
+        # Cast embedding to vector type for pgvector cosine_distance function
+        embedding_vector = cast(query_embedding, Vector(768))
+        
         # Build query to search through chunks
         chunk_query = db.query(
             NoteChunk.note_id,
-            func.max(1 - func.cosine_distance(NoteChunk.embedding, query_embedding)).label('max_similarity')
+            func.max(1 - func.cosine_distance(NoteChunk.embedding, embedding_vector)).label('max_similarity')
         ).join(
             Note, NoteChunk.note_id == Note.id
         ).filter(
@@ -655,9 +738,9 @@ def semantic_search_notes(
         
         # Group by note_id and get the maximum similarity for each note
         chunk_query = chunk_query.group_by(NoteChunk.note_id).having(
-            func.max(1 - func.cosine_distance(NoteChunk.embedding, query_embedding)) >= similarity_threshold
+            func.max(1 - func.cosine_distance(NoteChunk.embedding, embedding_vector)) >= similarity_threshold
         ).order_by(
-            func.max(1 - func.cosine_distance(NoteChunk.embedding, query_embedding)).desc()
+            func.max(1 - func.cosine_distance(NoteChunk.embedding, embedding_vector)).desc()
         ).limit(limit)
         
         # Execute chunk query to get note_ids with similarities
@@ -685,7 +768,7 @@ def semantic_search_notes(
         # Sort notes by similarity score and format results
         notes_with_scores = [
             {
-                "note": note,
+                "note": NoteSchema.model_validate(note),
                 "similarity_score": similarity_map[note.id]
             }
             for note in sorted(notes, key=lambda n: similarity_map[n.id], reverse=True)
@@ -714,4 +797,3 @@ def semantic_search_notes(
             message="Semantic search failed",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-

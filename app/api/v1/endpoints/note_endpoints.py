@@ -11,6 +11,7 @@ from app.schemas.note import (
     Note,
     NoteCreate,
     NoteUpdate,
+    NoteSearchDto,
     NotesListResponse,
     NoteCreateResponse,
     NoteCategoriesResponse,
@@ -20,6 +21,9 @@ from app.schemas.note import (
     SemanticSearchRequest,
     SemanticSearchResponse
 )
+from app.schemas.pagination import ResponseCommon as ResponseCommonSchema, PageDto
+from app.common.pagination_utils import PaginationHelper
+from app.common.response_common import ResponseCommon
 from app.services.note_service import (
     summarize_audio_transcript,
     get_notes_list,
@@ -29,14 +33,50 @@ from app.services.note_service import (
     delete_note,
     get_note_categories,
     get_note_priorities,
-    semantic_search_notes
+    semantic_search_notes,
+    search_notes as search_notes_service
 )
 from app.services.task_job_service import task_job_service
 
 router = APIRouter()
 
 
-@router.get("")
+@router.post("/search", response_model=ResponseCommonSchema[PageDto[Note]])
+async def search_notes(
+    search_dto: NoteSearchDto,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Search and filter notes with pagination.
+
+    - **page**: Current page number (default: 1)
+    - **page_size**: Items per page (default: 10)
+    - **order**: Sort order - ASC or DESC (default: DESC)
+    - **search**: Search in title, content, summary, tags
+    - **category**: Filter by category
+    - **priority**: Filter by priority
+    - **is_favorite**: Filter favorite notes
+    - **is_archived**: Filter archived notes
+    - **is_shared**: Filter shared notes
+    - **tags**: Filter by tags
+    - **from_date**: Filter notes created after date
+    - **to_date**: Filter notes created before date
+    - **audio_file_id**: Filter by linked audio file
+    """
+    paginated_notes = search_notes_service(
+        db=db,
+        user_id=current_user.id,
+        search_dto=search_dto,
+    )
+
+    return PaginationHelper.create_response(
+        paginated_data=paginated_notes,
+        message="Notes retrieved successfully",
+    )
+
+
+@router.get("", deprecated=True)
 async def list_notes(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(20, ge=1, le=100, description="Maximum number of records to return"),
@@ -51,6 +91,8 @@ async def list_notes(
     Get a paginated list of notes with optional filters.
     
     By default, archived notes are not shown unless is_archived=true is specified.
+
+    Deprecated: Use POST /notes/search instead.
     """
     result = get_notes_list(
         db=db,
@@ -122,7 +164,11 @@ async def get_note(
             status_code=note_response.code,
             media_type="application/json"
         )
-    return note_response.to_json()
+    note_schema = Note.model_validate(note_response.data)
+    return ResponseCommon.success_response(
+        data=note_schema,
+        message=CommonMessage.NOTE_RETRIEVED_SUCCESS,
+    ).to_json()
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

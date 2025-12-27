@@ -10,12 +10,14 @@ try:
     from google.cloud import speech_v1 as speech
     from google.cloud import storage
     from google.api_core import exceptions as gcp_exceptions
+    from google.api_core import retry as gcp_retry
     GOOGLE_CLOUD_AVAILABLE = True
 except ImportError:
     GOOGLE_CLOUD_AVAILABLE = False
     speech = None
     storage = None
     gcp_exceptions = None
+    gcp_retry = None
 
 try:
     from pydub import AudioSegment
@@ -86,9 +88,22 @@ class TranscriptService:
         try:
             bucket = self.storage_client.bucket(self.gcs_bucket_name)
             blob = bucket.blob(gcs_file_name)
-            
+            blob.chunk_size = 8 * 1024 * 1024
+
+            upload_timeout = 600
+            retry = None
+            if gcp_retry is not None:
+                retry = gcp_retry.Retry(
+                    predicate=gcp_retry.if_transient_error,
+                    deadline=upload_timeout,
+                )
+
             # Upload the file
-            blob.upload_from_filename(local_file_path)
+            blob.upload_from_filename(
+                local_file_path,
+                timeout=upload_timeout,
+                retry=retry,
+            )
             
             gcs_uri = f"gs://{self.gcs_bucket_name}/{gcs_file_name}"
             logger.info(f"File uploaded to GCS: {gcs_uri}")
@@ -123,8 +138,8 @@ class TranscriptService:
             operation = self.client.long_running_recognize(config=config, audio=audio)
             
             logger.info("Waiting for transcription to complete...")
-            # Wait for the operation to complete (timeout: 15 minutes)
-            response = operation.result(timeout=900)
+            # Wait for the operation to complete (timeout: 2 hours)
+            response = operation.result(timeout=7200)
             
             # Process results
             full_transcript = ""

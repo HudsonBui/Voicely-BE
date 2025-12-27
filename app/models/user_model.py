@@ -17,6 +17,7 @@ class User(Base):
     
     # Relationships
     audio_files = relationship("AudioFile", back_populates="user")
+    folders = relationship("Folder", back_populates="user")
     notes = relationship("Note", back_populates="user")
     task_jobs = relationship("TaskJob", back_populates="user")
     chatbot_sessions = relationship(
@@ -24,3 +25,5 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    devices = relationship("UserDevice", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")

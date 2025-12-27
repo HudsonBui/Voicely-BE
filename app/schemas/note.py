@@ -1,11 +1,17 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Any
 from datetime import datetime
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+from app.schemas.pagination import PageOptionsDto
 
 class NoteBase(BaseModel):
     title: str
     content: Optional[str] = None
-    summary: Optional[str] = None
+    summary: Optional[Any] = None
     category: Optional[str] = "general"
     priority: Optional[str] = "normal"
     is_favorite: Optional[bool] = False
@@ -14,6 +20,17 @@ class NoteBase(BaseModel):
     audio_timestamp: Optional[float] = None
     audio_transcript_excerpt: Optional[str] = None
     is_shared: Optional[bool] = False
+
+    @field_validator("summary")
+    @classmethod
+    def parse_summary(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse summary JSON string")
+                return v
+        return v
 
 class NoteCreate(NoteBase):
     audio_file_id: Optional[int] = None
@@ -48,6 +65,42 @@ class Note(NoteBase):
 class NoteWithAudio(Note):
     audio_file: Optional[dict] = None  # AudioFile info if linked
 
+
+class NoteSearchDto(PageOptionsDto):
+    """
+    Notes search/filter request payload.
+    Extends base pagination with note-specific filters.
+    """
+
+    category: Optional[str] = Field(default=None, description="Filter by category")
+    priority: Optional[str] = Field(default=None, description="Filter by priority (low, normal, high)")
+    is_favorite: Optional[bool] = Field(default=None, description="Filter favorite notes")
+    is_archived: Optional[bool] = Field(default=None, description="Filter archived notes")
+    is_shared: Optional[bool] = Field(default=None, description="Filter shared notes")
+    tags: Optional[str] = Field(default=None, description="Filter by tags (comma-separated)")
+    from_date: Optional[datetime] = Field(default=None, description="Filter notes created after this date")
+    to_date: Optional[datetime] = Field(default=None, description="Filter notes created before this date")
+    audio_file_id: Optional[int] = Field(default=None, description="Filter by linked audio file")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "page": 1,
+                "page_size": 10,
+                "order": "DESC",
+                "search": "meeting",
+                "category": "work",
+                "priority": "high",
+                "is_favorite": True,
+                "is_archived": False,
+                "is_shared": False,
+                "tags": "work,urgent",
+                "audio_file_id": 123,
+                "from_date": "2025-01-01T00:00:00",
+                "to_date": "2025-12-31T23:59:59",
+            }
+        }
+
 class NotesListResponse(BaseModel):
     notes: List[Note]
     total_count: int
@@ -71,9 +124,19 @@ class SummarizeTranscriptRequest(BaseModel):
 
 class SummarizeTranscriptResponse(BaseModel):
     audio_file_id: int
-    summary_json: str  # Quill Delta JSON format string
+    summary_json: Any  # Quill Delta JSON format (can be object or string)
     note_id: int
     message: str
+
+    @field_validator("summary_json")
+    @classmethod
+    def parse_summary_json(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return v
+        return v
 
 
 # Semantic search request/response

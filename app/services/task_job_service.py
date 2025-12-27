@@ -1,11 +1,16 @@
 import uuid
+import json
 from typing import Optional
 
 from fastapi import Request
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from app.common.response_common import ResponseCommon
+from app.common.pagination_utils import PaginationHelper
 from app.models.task_job_model import TaskJob
+from app.schemas.pagination import PageDto
+from app.schemas.task_job import TaskSearchDto, TaskJobResponse
 
 
 class TaskJobService:
@@ -85,6 +90,62 @@ class TaskJobService:
             message="Task queued successfully. Use job_id to check status.",
         )
 
+    def search_tasks(
+        self, db: Session, user_id: int, search_dto: TaskSearchDto
+    ) -> PageDto[TaskJobResponse]:
+        """
+        Search and filter user's tasks with pagination
+
+        Args:
+            db: Database session
+            user_id: Current user ID
+            search_dto: Search filters and pagination options
+
+        Returns:
+            PageDto with tasks and pagination metadata
+        """
+        query = db.query(TaskJob).filter(TaskJob.user_id == user_id)
+
+        if search_dto.search:
+            search_term = f"%{search_dto.search}%"
+            query = query.filter(
+                or_(
+                    TaskJob.task_type.ilike(search_term),
+                    TaskJob.status.ilike(search_term),
+                    TaskJob.id.ilike(search_term),
+                )
+            )
+
+        if search_dto.status is not None:
+            query = query.filter(TaskJob.status == search_dto.status)
+
+        if search_dto.task_type is not None:
+            query = query.filter(TaskJob.task_type == search_dto.task_type)
+
+        if search_dto.audio_id is not None:
+            query = query.filter(TaskJob.audio_id == search_dto.audio_id)
+
+        if search_dto.active_only:
+            query = query.filter(TaskJob.status.in_(["pending", "queued", "processing"]))
+
+        if search_dto.from_date:
+            query = query.filter(TaskJob.created_at >= search_dto.from_date)
+
+        if search_dto.to_date:
+            query = query.filter(TaskJob.created_at <= search_dto.to_date)
+
+        order_value = getattr(search_dto.order, "value", search_dto.order)
+        if str(order_value).upper() == "ASC":
+            query = query.order_by(TaskJob.created_at.asc())
+        else:
+            query = query.order_by(TaskJob.created_at.desc())
+
+        return PaginationHelper.paginate_query(
+            query=query,
+            page_options=search_dto,
+            response_model=TaskJobResponse,
+        )
+
     def get_job_status(self, db: Session, job_id: str, user_id: int) -> ResponseCommon:
         """Get job status by job_id."""
         try:
@@ -97,12 +158,21 @@ class TaskJobService:
             if not job:
                 return ResponseCommon.error_response(message="Job not found", code=404)
 
+            # Parse result from JSON string to dict if present
+            result_data = None
+            if job.result:
+                try:
+                    result_data = json.loads(job.result)
+                except (json.JSONDecodeError, TypeError):
+                    # If parsing fails, return as-is
+                    result_data = job.result
+
             return ResponseCommon.success_response(
                 data={
                     "job_id": job.id,
                     "task_type": job.task_type,
                     "status": job.status,
-                    "result": job.result,
+                    "result": result_data,
                     "error_message": job.error_message,
                     "created_at": job.created_at,
                     "updated_at": job.updated_at,

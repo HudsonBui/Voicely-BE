@@ -54,7 +54,7 @@ async def handle_audio_upload(
         }
 
         job_record.status = "completed"
-        job_record.result = json.dumps(result)
+        job_record.result = json.dumps(result, ensure_ascii=False)
         if audio_file:
             audio_file.status = "completed"
         db.commit()
@@ -136,6 +136,25 @@ async def handle_transcription(
             job_record.result = transcription_response.data.get("transcript")
         db.commit()
 
+        try:
+            from app.services.notification_service import NotificationService
+
+            await NotificationService.send_and_store_notification(
+                db=db,
+                user_id=user_id,
+                title="Transcription Complete ✅",
+                body=f"Your audio '{audio_file.original_filename}' has been transcribed successfully",
+                notification_type="transcription_complete",
+                related_id=audio_id,
+                data={
+                    "type": "transcription_complete",
+                    "audio_id": str(audio_id),
+                    "status": "completed",
+                },
+            )
+        except Exception as notify_exc:
+            logger.error("Failed to send transcription notification: %s", notify_exc)
+
         logger.info("Completed transcription for job: %s", job_id)
     except Exception as exc:
         logger.error("Error processing transcription job %s: %s", job_id, str(exc))
@@ -147,6 +166,25 @@ async def handle_transcription(
             audio_file.status = "failed"
         if job_record or audio_file:
             db.commit()
+        if audio_file:
+            try:
+                from app.services.notification_service import NotificationService
+
+                await NotificationService.send_and_store_notification(
+                    db=db,
+                    user_id=user_id,
+                    title="Transcription Failed ❌",
+                    body=f"Failed to transcribe '{audio_file.original_filename}'",
+                    notification_type="transcription_failed",
+                    related_id=audio_id,
+                    data={
+                        "type": "transcription_failed",
+                        "audio_id": str(audio_id),
+                        "status": "failed",
+                    },
+                )
+            except Exception as notify_exc:
+                logger.error("Failed to send transcription failure notification: %s", notify_exc)
     finally:
         db.close()
 
@@ -179,8 +217,29 @@ async def handle_summarization(ctx, job_id: str, audio_id: int, user_id: int):
             raise Exception(summary_response.message)
 
         job_record.status = "completed"
-        job_record.result = json.dumps(summary_response.data)
+        job_record.result = json.dumps(summary_response.data, ensure_ascii=False)
         db.commit()
+
+        try:
+            from app.services.notification_service import NotificationService
+
+            note_id = summary_response.data.get("note_id") if summary_response.data else None
+            await NotificationService.send_and_store_notification(
+                db=db,
+                user_id=user_id,
+                title="Summary Ready 📝",
+                body="Your note has been summarized",
+                notification_type="summarization_complete",
+                related_id=note_id,
+                data={
+                    "type": "summarization_complete",
+                    "audio_id": str(audio_id),
+                    "note_id": str(note_id) if note_id else "",
+                    "status": "completed",
+                },
+            )
+        except Exception as notify_exc:
+            logger.error("Failed to send summarization notification: %s", notify_exc)
 
         logger.info("Completed summarization for job: %s", job_id)
     except Exception as exc:
@@ -190,6 +249,24 @@ async def handle_summarization(ctx, job_id: str, audio_id: int, user_id: int):
             job_record.status = "failed"
             job_record.error_message = str(exc)
             db.commit()
+        try:
+            from app.services.notification_service import NotificationService
+
+            await NotificationService.send_and_store_notification(
+                db=db,
+                user_id=user_id,
+                title="Summarization Failed ❌",
+                body="Failed to summarize your note",
+                notification_type="summarization_failed",
+                related_id=audio_id,
+                data={
+                    "type": "summarization_failed",
+                    "audio_id": str(audio_id),
+                    "status": "failed",
+                },
+            )
+        except Exception as notify_exc:
+            logger.error("Failed to send summarization failure notification: %s", notify_exc)
     finally:
         db.close()
 

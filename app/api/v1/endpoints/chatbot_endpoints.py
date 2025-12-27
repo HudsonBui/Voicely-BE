@@ -145,20 +145,12 @@ async def get_session_messages(
             limit=limit,
             offset=offset,
         )
-        messages = [
-            {
-                "message_id": msg.message_id,
-                "role": msg.role,
-                "content": msg.content,
-                "intent": msg.intent,
-                "created_at": msg.created_at.isoformat() if msg.created_at else None,
-            }
-            for msg in result["messages"]
-        ]
+        
+        # Messages are already enriched by the service with audio_references and note_references
         response = ResponseCommon.success_response(
             data={
                 "session_id": result["session"].session_id,
-                "messages": messages,
+                "messages": result["messages"],
                 "total": result["total"],
                 "limit": result["limit"],
                 "offset": result["offset"],

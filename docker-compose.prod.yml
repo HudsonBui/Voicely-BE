@@ -5,7 +5,8 @@ services:
     ports:
       - "8802:8800"
     volumes:
-      - ./voicely-be-fb9f1d6b9381.json:/code/voicely-be-fb9f1d6b9381.json:ro
+      - ./voicely-be-482416-18706ffed61a.json:/code/voicely-be-482416-18706ffed61a.json:ro
+      - ./voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:/code/voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:ro
       - uploads-data:/code/uploads
     env_file:
       - .env
@@ -19,7 +20,7 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-fb9f1d6b9381.json
+      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-482416-18706ffed61a.json
     restart: unless-stopped
     command: >
       uvicorn app.main:sio_app --host 0.0.0.0 --port 8800
@@ -28,7 +29,8 @@ services:
     build: .
     container_name: voicely_worker
     volumes:
-      - ./voicely-be-fb9f1d6b9381.json:/code/voicely-be-fb9f1d6b9381.json:ro
+      - ./voicely-be-482416-18706ffed61a.json:/code/voicely-be-482416-18706ffed61a.json:ro
+      - ./voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:/code/voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:ro
       - uploads-data:/code/uploads
     env_file:
       - .env
@@ -42,7 +44,7 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-fb9f1d6b9381.json
+      GOOGLE_APPLICATION_CREDENTIALS: /code/voicely-be-482416-18706ffed61a.json
     restart: unless-stopped
     command: >
       arq app.worker.WorkerSettings

@@ -1,14 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import time
 import logging
+import os
 
 from app.api.v1.router import api_router
 from arq import create_pool
 from app.core.redis_config import REDIS_SETTINGS
 from app.socket_manager import sio
 import socketio
+from app.core.firebase_config import init_firebase
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -17,11 +20,17 @@ app = FastAPI(title="Voicely API", version="1.0.0", docs_url="/docs")
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Add your frontend URL
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Create uploads directory if it doesn't exist
+os.makedirs("uploads", exist_ok=True)
+
+# Mount uploads directory to serve static files
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Include API routes
 app.include_router(api_router)
@@ -31,7 +40,9 @@ async def startup_event():
     """Create database tables on startup with retry logic"""
     from app.db.session import engine
     from app.models import User, AudioFile, TaskJob, ChatbotSession, ChatbotMessage
-    
+
+    init_firebase()
+
     max_retries = 5
     retry_delay = 2
     

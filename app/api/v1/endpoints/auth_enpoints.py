@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.responses import Response
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
@@ -17,10 +17,13 @@ from app.services.auth_service import (
     get_token_expiration_info
 )
 from app.models import User
+from app.models.user_device_model import UserDevice
+from app.schemas.notification import DeviceRegisterRequest
 from app.config import settings
 
 from app.common.response_common import ResponseCommon
 from app.common.common_message import CommonMessage
+from datetime import datetime, timezone
 
 router = APIRouter()
 security = HTTPBearer()
@@ -150,10 +153,93 @@ def get_current_user_info(current_user: User = Depends(get_current_active_user))
     return response.to_json()
 
 @router.post('/logout')
-def logout():
-    # In a real application, you might want to blacklist the token
-    # For now, we'll just return a success message
+def logout(
+    fcm_token: str | None = Body(None, embed=True),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    if fcm_token:
+        device = db.query(UserDevice).filter(
+            UserDevice.fcm_token == fcm_token,
+            UserDevice.user_id == current_user.id,
+        ).first()
+
+        if device:
+            device.is_active = False
+            db.commit()
+
     response = ResponseCommon.success_response(
         message=CommonMessage.LOGOUT_SUCCESS
+    )
+    return response.to_json()
+
+
+@router.post('/register-device')
+def register_device(
+    request: DeviceRegisterRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    existing_device = db.query(UserDevice).filter(
+        UserDevice.fcm_token == request.fcm_token
+    ).first()
+
+    if existing_device:
+        existing_device.user_id = current_user.id
+        existing_device.device_type = request.device_type
+        existing_device.device_name = request.device_name
+        existing_device.is_active = True
+        existing_device.last_login = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(existing_device)
+        device = existing_device
+    else:
+        device = UserDevice(
+            user_id=current_user.id,
+            fcm_token=request.fcm_token,
+            device_type=request.device_type,
+            device_name=request.device_name,
+            is_active=True,
+            last_login=datetime.now(timezone.utc),
+        )
+        db.add(device)
+        db.commit()
+        db.refresh(device)
+
+    response = ResponseCommon.success_response(
+        data={
+            "id": device.id,
+            "user_id": device.user_id,
+            "fcm_token": device.fcm_token,
+            "device_type": device.device_type,
+            "device_name": device.device_name,
+            "is_active": device.is_active,
+            "last_login": device.last_login,
+        },
+        message="Device registered successfully",
+    )
+    return response.to_json()
+
+
+@router.get('/devices')
+def list_devices(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    devices = db.query(UserDevice).filter(UserDevice.user_id == current_user.id).all()
+    response = ResponseCommon.success_response(
+        data=[
+            {
+                "id": device.id,
+                "user_id": device.user_id,
+                "fcm_token": device.fcm_token,
+                "device_type": device.device_type,
+                "device_name": device.device_name,
+                "is_active": device.is_active,
+                "last_login": device.last_login,
+            }
+            for device in devices
+        ],
+        message="Devices retrieved successfully",
     )
     return response.to_json()

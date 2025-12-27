@@ -5,6 +5,7 @@ class AudioFile(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    folder_id = Column(Integer, ForeignKey("folders.id"), nullable=True)
     filename = Column(String, nullable=False)
     original_filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
@@ -29,5 +30,6 @@ class AudioFile(Base):
     
     # Relationships
     user = relationship("User", back_populates="audio_files")
+    folder = relationship("Folder", back_populates="audio_files")
     notes = relationship("Note", back_populates="audio_file")
     task_jobs = relationship("TaskJob", back_populates="audio_file")

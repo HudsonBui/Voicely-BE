@@ -177,13 +177,85 @@ class ChatbotService:
             .limit(limit)
             .all()
         )
+        
+        # Build rich message data with references
+        enriched_messages = [
+            self._build_message_with_references(db, msg)
+            for msg in reversed(messages)
+        ]
+        
         return {
             "session": session,
-            "messages": list(reversed(messages)),
+            "messages": enriched_messages,
             "total": total,
             "limit": limit,
             "offset": offset,
         }
+    
+    def _build_message_with_references(
+        self,
+        db: Session,
+        message: ChatbotMessage
+    ) -> dict:
+        """
+        Build rich message response with audio and note references.
+        
+        Args:
+            db: Database session
+            message: ChatbotMessage model instance
+            
+        Returns:
+            Dictionary with complete message data including references
+        """
+        from app.models.audio_model import AudioFile
+        from app.models.note_model import Note
+        
+        result = {
+            "message_id": message.message_id,
+            "role": message.role,
+            "response": message.content,
+            "intent": message.intent,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+        
+        # Only add references for assistant messages
+        if message.role == "assistant":
+            # Build audio_references
+            audio_references = []
+            if message.retrieved_audio_ids:
+                audio_files = db.query(AudioFile).filter(
+                    AudioFile.id.in_(message.retrieved_audio_ids)
+                ).all()
+                
+                audio_references = [
+                    {
+                        "audio_id": audio.id,
+                        "title": audio.original_filename,
+                        "duration": audio.duration,
+                        "created_at": audio.created_at.isoformat() if audio.created_at else None,
+                    }
+                    for audio in audio_files
+                ]
+            
+            # Build note_references
+            note_references = []
+            if message.retrieved_note_ids:
+                notes = db.query(Note).filter(
+                    Note.id.in_(message.retrieved_note_ids)
+                ).all()
+                
+                note_references = [
+                    {
+                        "note_id": note.id,
+                        "title": note.title
+                    }
+                    for note in notes
+                ]
+            
+            result["audio_references"] = audio_references
+            result["note_references"] = note_references
+        
+        return result
 
     def delete_session(self, db: Session, user_id: int, session_id: str) -> None:
         session = self._get_session(db, user_id, session_id)

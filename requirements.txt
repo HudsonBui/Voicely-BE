@@ -18,4 +18,5 @@ pgvector==0.4.1
 arq==0.26.3
 redis==5.0.0
 python-socketio==5.11.0
+firebase-admin>=6.0.0
 # Note: ffmpeg system package is optional for audio duration detection

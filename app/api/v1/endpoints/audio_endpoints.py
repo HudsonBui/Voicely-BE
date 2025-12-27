@@ -5,8 +5,12 @@ from typing import List
 import json
 
 from app.api.deps import get_db, get_current_active_user
-from app.models import User
-from app.schemas.audio import AudioFile as AudioFileSchema, AudioUploadResponse
+from app.models import Note, User
+from app.schemas.audio import AudioFile as AudioFileSchema, AudioFileUpdate, AudioSearchDto, AudioUploadResponse
+from app.schemas.pagination import ResponseCommon as ResponseCommonSchema, PageDto
+from app.common.pagination_utils import PaginationHelper
+from app.common.common_message import CommonMessage
+from app.common.response_common import ResponseCommon
 from app.services.audio_service import audio_service
 from app.services.task_job_service import task_job_service
 import logging
@@ -168,7 +172,92 @@ async def upload_audio_file_async(
             media_type="application/json",
         )
 
-@router.get("/files")
+@router.post("/search", response_model=ResponseCommonSchema[PageDto[AudioFileSchema]])
+async def search_audio_files(
+    search_dto: AudioSearchDto,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Search and filter audio files with pagination.
+
+    - **page**: Current page number (default: 1)
+    - **page_size**: Items per page (default: 10)
+    - **order**: Sort order - ASC or DESC (default: DESC)
+    - **search**: Search in filename
+    - **status**: Filter by processing status
+    - **from_date**: Filter files uploaded after date
+    - **to_date**: Filter files uploaded before date
+    - **min_duration**: Minimum duration in seconds
+    - **max_duration**: Maximum duration in seconds
+    - **has_transcript**: Filter files with/without transcripts
+    - **has_summary**: Filter files with/without summary notes
+
+    Response includes:
+    - **is_summarize**: Boolean indicating if the audio has been summarized
+    """
+    paginated_files = audio_service.search_audio_files(
+        db=db,
+        user_id=current_user.id,
+        search_dto=search_dto,
+    )
+
+    return PaginationHelper.create_response(
+        paginated_data=paginated_files,
+        message="Audio files retrieved successfully",
+    )
+
+
+@router.put("/{audio_id}", response_model=ResponseCommonSchema[AudioFileSchema])
+async def update_audio_file(
+    audio_id: int,
+    update_data: AudioFileUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Update audio file information.
+
+    This endpoint allows users to:
+    - Edit the transcription text if it's incorrect
+    - Update the original filename
+
+    Only the provided fields will be updated (partial updates supported).
+    """
+    logger.info("Updating audio file %s for user %s", audio_id, current_user.id)
+
+    update_dict = update_data.model_dump(exclude_unset=True)
+    if not update_dict:
+        from app.common.response_common import ResponseCommon
+
+        error_response = ResponseCommon.error_response(
+            message=CommonMessage.AUDIO_UPDATE_NO_FIELDS,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+        return Response(
+            content=json.dumps(error_response.to_json()),
+            status_code=error_response.code,
+            media_type="application/json",
+        )
+
+    update_response = audio_service.update_audio_file(
+        db=db,
+        audio_id=audio_id,
+        user_id=current_user.id,
+        update_data=update_dict,
+    )
+
+    if not update_response.success:
+        return Response(
+            content=json.dumps(update_response.to_json()),
+            status_code=update_response.code,
+            media_type="application/json",
+        )
+
+    return update_response.to_json()
+
+
+@router.get("/files", deprecated=True)
 def get_audio_files(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
@@ -177,6 +266,8 @@ def get_audio_files(
 ):
     """
     Get all audio files for the authenticated user.
+
+    Deprecated: Use POST /audio/search instead.
     """
     audio_files_response = audio_service.get_user_audio_files(
         db=db, 
@@ -213,8 +304,32 @@ def get_audio_file(
             status_code=audio_file_response.code,
             media_type="application/json"
         )
-    
-    return audio_file_response.to_json()
+
+    audio_file = audio_file_response.data
+    note_exists = db.query(Note).filter(Note.audio_file_id == audio_file.id).first() is not None
+    audio_schema = AudioFileSchema.model_validate(
+        {
+            "id": audio_file.id,
+            "user_id": audio_file.user_id,
+            "filename": audio_file.filename,
+            "original_filename": audio_file.original_filename,
+            "file_path": audio_file.file_path,
+            "file_size": audio_file.file_size,
+            "duration": audio_file.duration,
+            "format": audio_file.format,
+            "status": audio_file.status,
+            "transcription": audio_file.transcription,
+            "confidence_score": audio_file.confidence_score,
+            "created_at": audio_file.created_at,
+            "updated_at": audio_file.updated_at,
+            "is_summarize": bool(note_exists),
+        }
+    )
+
+    return ResponseCommon.success_response(
+        data=audio_schema,
+        message=CommonMessage.AUDIO_RETRIEVED_SUCCESS,
+    ).to_json()
 
 @router.delete("/files/{audio_id}")
 def delete_audio_file(
@@ -225,22 +340,10 @@ def delete_audio_file(
     """
     Delete a specific audio file by ID for the authenticated user.
     """
-    audio_file_response = audio_service.get_audio_file_by_id(
-        db=db,
-        audio_id=audio_id,
-        user=current_user
-    )
-    
-    if not audio_file_response.success:
-        return Response(
-            content=json.dumps(audio_file_response.to_json()),
-            status_code=audio_file_response.code,
-            media_type="application/json"
-        )
-    
     delete_response = audio_service.delete_audio_file(
         db=db,
-        audio_file=audio_file_response.data
+        audio_id=audio_id,
+        user_id=current_user.id
     )
     
     if not delete_response.success:
