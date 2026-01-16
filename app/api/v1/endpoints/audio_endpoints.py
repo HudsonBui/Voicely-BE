@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status, Query, Request, Form
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import json
 
 from app.api.deps import get_db, get_current_active_user
@@ -22,6 +22,7 @@ router = APIRouter()
 @router.post("/upload")
 async def upload_audio_file(
     file: UploadFile = File(...),
+    folder_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -62,7 +63,8 @@ async def upload_audio_file(
             file=file,
             user=current_user,
             file_path=file_path,
-            file_format=file_format
+            file_format=file_format,
+            folder_id=folder_id
         )
         if not create_result.success:
             logger.error(f"Failed to create audio record in DB: {create_result.message}")
@@ -93,6 +95,7 @@ async def upload_audio_file(
 async def upload_audio_file_async(
     request: Request,
     file: UploadFile = File(...),
+    folder_id: Optional[int] = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -129,6 +132,7 @@ async def upload_audio_file_async(
             user=current_user,
             file_path=file_path,
             file_format=file_format,
+            folder_id=folder_id,
         )
         if not create_result.success:
             logger.error("Failed to create audio record in DB: %s", create_result.message)
@@ -311,6 +315,7 @@ def get_audio_file(
         {
             "id": audio_file.id,
             "user_id": audio_file.user_id,
+            "folder_id": audio_file.folder_id,
             "filename": audio_file.filename,
             "original_filename": audio_file.original_filename,
             "file_path": audio_file.file_path,

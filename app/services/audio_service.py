@@ -117,7 +117,8 @@ class AudioService:
         file: UploadFile, 
         user: User, 
         file_path: str, 
-        file_format: str
+        file_format: str,
+        folder_id: Optional[int] = None
     ) -> ResponseCommon:
         """Create audio file record in database"""
         
@@ -140,11 +141,13 @@ class AudioService:
             original_filename=file.filename or "unknown",
             file_size=file_size,
             duration=duration,
-            format=file_format
+            format=file_format,
+            folder_id=folder_id
         )
         
         audio_file = AudioFileModel(
             user_id=user.id,
+            folder_id=audio_data.folder_id,
             filename=audio_data.filename,
             original_filename=audio_data.original_filename,
             file_path=file_path,
@@ -202,7 +205,7 @@ class AudioService:
                 code=status.HTTP_404_NOT_FOUND
             )
 
-        allowed_fields = {"transcription", "original_filename"}
+        allowed_fields = {"transcription", "original_filename", "folder_id"}
         has_values = any(
             field in allowed_fields and value is not None
             for field, value in update_data.items()
@@ -303,6 +306,9 @@ class AudioService:
             note_exists_subquery.label("has_note"),
         ).filter(AudioFileModel.user_id == user_id)
 
+        if search_dto.folder_id is not None:
+            query = query.filter(AudioFileModel.folder_id == search_dto.folder_id)
+
         if search_dto.search:
             search_term = f"%{search_dto.search}%"
             query = query.filter(AudioFileModel.filename.ilike(search_term))
@@ -371,6 +377,7 @@ class AudioService:
             audio_dict = {
                 "id": audio_file.id,
                 "user_id": audio_file.user_id,
+                "folder_id": audio_file.folder_id,
                 "filename": audio_file.filename,
                 "original_filename": audio_file.original_filename,
                 "file_path": audio_file.file_path,

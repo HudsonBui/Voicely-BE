@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 
+from app.schemas.pagination import PageOptionsDto
+
 
 class FolderBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Folder name")
@@ -47,3 +49,55 @@ class MoveAudioToFolder(BaseModel):
     audio_id: int
     folder_id: Optional[int] = Field(None, description="Folder ID (null to remove from folder)")
 
+
+class FolderSearchDto(PageOptionsDto):
+    """
+    Folders search/filter request payload.
+    Extends base pagination with folder-specific filters.
+    """
+
+    is_default: Optional[bool] = Field(
+        default=None,
+        description="Filter default folders",
+    )
+    color: Optional[str] = Field(
+        default=None,
+        description="Filter by color (hex code)",
+    )
+    has_audio: Optional[bool] = Field(
+        default=None,
+        description="Filter folders with/without audio files",
+    )
+    min_audio_count: Optional[int] = Field(
+        default=None,
+        description="Minimum number of audio files",
+    )
+    max_audio_count: Optional[int] = Field(
+        default=None,
+        description="Maximum number of audio files",
+    )
+    from_date: Optional[datetime] = Field(
+        default=None,
+        description="Filter folders created after this date",
+    )
+    to_date: Optional[datetime] = Field(
+        default=None,
+        description="Filter folders created before this date",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "page": 1,
+                "page_size": 10,
+                "order": "DESC",
+                "search": "work",
+                "is_default": False,
+                "color": "#FF5733",
+                "has_audio": True,
+                "min_audio_count": 1,
+                "max_audio_count": 100,
+                "from_date": "2025-01-01T00:00:00",
+                "to_date": "2025-12-31T23:59:59",
+            }
+        }

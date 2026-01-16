@@ -10,6 +10,7 @@ class AudioFileBase(BaseModel):
     file_size: int
     duration: Optional[float] = None
     format: str
+    folder_id: Optional[int] = None
 
 class AudioFileCreate(AudioFileBase):
     pass
@@ -29,6 +30,10 @@ class AudioFileUpdate(BaseModel):
         min_length=1,
         max_length=255,
         description="Updated original filename",
+    )
+    folder_id: Optional[int] = Field(
+        default=None,
+        description="ID of the folder to move the audio file to",
     )
 
     @field_validator("original_filename")
@@ -75,6 +80,9 @@ class AudioSearchDto(PageOptionsDto):
     Extends base pagination with audio-specific filters.
     """
 
+    folder_id: Optional[int] = Field(
+        default=None, description="Filter audio files by folder ID"
+    )
     status: Optional[str] = Field(
         default=None, description="Filter by status (uploaded, processing, completed, failed)"
     )

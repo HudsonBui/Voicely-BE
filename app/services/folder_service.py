@@ -1,11 +1,13 @@
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, and_, or_
 from fastapi import status
 
 from app.models import Folder, AudioFile, User
-from app.schemas.folder import FolderCreate
+from app.schemas.folder import FolderCreate, FolderSearchDto, Folder as FolderSchema
+from app.schemas.pagination import PageDto
+from app.common.pagination_utils import PaginationHelper
 from app.common.response_common import ResponseCommon
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,100 @@ class FolderService:
             folders_list.append(folder_dict)
         
         return ResponseCommon.success_response(data=folders_list)
+
+    def search_folders(
+        self, db: Session, user_id: int, search_dto: FolderSearchDto
+    ) -> PageDto[FolderSchema]:
+        """
+        Search and filter folders with pagination.
+
+        Args:
+            db: Database session
+            user_id: Current user ID
+            search_dto: Search criteria and pagination options
+
+        Returns:
+            PageDto containing folders and pagination metadata
+        """
+        try:
+            audio_count_expr = func.count(AudioFile.id)
+            query = db.query(
+                Folder,
+                audio_count_expr.label("audio_count"),
+            ).outerjoin(
+                AudioFile,
+                and_(
+                    AudioFile.folder_id == Folder.id,
+                    AudioFile.user_id == user_id,
+                ),
+            ).filter(
+                Folder.user_id == user_id
+            ).group_by(Folder.id)
+
+            if search_dto.search:
+                search_term = f"%{search_dto.search}%"
+                query = query.filter(
+                    or_(
+                        Folder.name.ilike(search_term),
+                        Folder.description.ilike(search_term),
+                    )
+                )
+
+            if search_dto.is_default is not None:
+                query = query.filter(Folder.is_default == search_dto.is_default)
+
+            if search_dto.color:
+                query = query.filter(Folder.color == search_dto.color)
+
+            if search_dto.has_audio is not None:
+                if search_dto.has_audio:
+                    query = query.having(audio_count_expr > 0)
+                else:
+                    query = query.having(audio_count_expr == 0)
+
+            if search_dto.min_audio_count is not None:
+                query = query.having(audio_count_expr >= search_dto.min_audio_count)
+
+            if search_dto.max_audio_count is not None:
+                query = query.having(audio_count_expr <= search_dto.max_audio_count)
+
+            if search_dto.from_date:
+                query = query.filter(Folder.created_at >= search_dto.from_date)
+
+            if search_dto.to_date:
+                query = query.filter(Folder.created_at <= search_dto.to_date)
+
+            order_value = getattr(search_dto.order, "value", search_dto.order)
+            if str(order_value).upper() == "ASC":
+                query = query.order_by(Folder.created_at.asc())
+            else:
+                query = query.order_by(Folder.created_at.desc())
+
+            if search_dto.is_dropdown:
+                results = query.all()
+                folders_with_count = self._build_folder_search_results(results)
+                meta = PaginationHelper.create_meta(
+                    page=1,
+                    page_size=len(folders_with_count),
+                    total_items=len(folders_with_count),
+                )
+                return PageDto(data=folders_with_count, meta=meta)
+
+            total_items = db.query(func.count()).select_from(query.subquery()).scalar() or 0
+            offset = (search_dto.page - 1) * search_dto.page_size
+            results = query.offset(offset).limit(search_dto.page_size).all()
+
+            folders_with_count = self._build_folder_search_results(results)
+            meta = PaginationHelper.create_meta(
+                page=search_dto.page,
+                page_size=search_dto.page_size,
+                total_items=total_items,
+            )
+
+            return PageDto(data=folders_with_count, meta=meta)
+        except Exception as e:
+            logger.error("Error searching folders: %s", str(e), exc_info=True)
+            raise
     
     def update_folder(self, db: Session, folder_id: int, user_id: int, update_data: dict) -> ResponseCommon:
         """Update folder information"""
@@ -341,7 +437,25 @@ class FolderService:
         
         return ResponseCommon.success_response(data=audio_list)
 
+    @staticmethod
+    def _build_folder_search_results(results):
+        folders_with_count = []
+        for folder, audio_count in results:
+            folder_dict = {
+                "id": folder.id,
+                "user_id": folder.user_id,
+                "name": folder.name,
+                "description": folder.description,
+                "color": folder.color,
+                "icon": folder.icon,
+                "is_default": folder.is_default,
+                "created_at": folder.created_at,
+                "updated_at": folder.updated_at,
+                "audio_count": audio_count or 0,
+            }
+            folders_with_count.append(FolderSchema(**folder_dict))
+        return folders_with_count
+
 
 # Create service instance
 folder_service = FolderService()
-

@@ -6,7 +6,7 @@ services:
       - "8000:8000"
     volumes:
       - .:/code
-      - ./voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:/code/voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:ro
+      - ./voicely-6808a-firebase-adminsdk-fbsvc-2f8c755c7c.json:/code/voicely-6808a-firebase-adminsdk-fbsvc-2f8c755c7c.json:ro
       - ./voicely-be-482416-18706ffed61a.json:/code/voicely-be-482416-18706ffed61a.json:ro
       - dev-static-data:/vol/web
     env_file:
@@ -30,7 +30,7 @@ services:
     container_name: voicely_worker
     volumes:
       - .:/code
-      - ./voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:/code/voicely-e0367-firebase-adminsdk-fbsvc-b41e4f72e4.json:ro
+      - ./voicely-6808a-firebase-adminsdk-fbsvc-2f8c755c7c.json:/code/voicely-6808a-firebase-adminsdk-fbsvc-2f8c755c7c.json:ro
       - ./voicely-be-482416-18706ffed61a.json:/code/voicely-be-482416-18706ffed61a.json:ro
       - dev-static-data:/vol/web
     env_file:

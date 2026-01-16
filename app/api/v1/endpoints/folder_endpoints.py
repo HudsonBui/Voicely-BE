@@ -5,7 +5,9 @@ import json
 
 from app.api.deps import get_db, get_current_active_user
 from app.models import User
-from app.schemas.folder import FolderCreate, FolderUpdate, MoveAudioToFolder
+from app.schemas.folder import FolderCreate, FolderUpdate, MoveAudioToFolder, Folder, FolderSearchDto
+from app.schemas.pagination import ResponseCommon as ResponseCommonSchema, PageDto
+from app.common.pagination_utils import PaginationHelper
 from app.services.folder_service import folder_service
 
 router = APIRouter()
@@ -39,7 +41,7 @@ async def create_folder(
     )
 
 
-@router.get("/")
+@router.get("/", deprecated=True)
 async def list_folders(
     skip: int = 0,
     limit: int = 100,
@@ -50,6 +52,8 @@ async def list_folders(
     List all folders for the authenticated user.
     
     Returns folders with audio file count.
+
+    ⚠️ DEPRECATED: Use POST /folders/search instead.
     """
     response = folder_service.list_folders(
         db=db,
@@ -62,6 +66,44 @@ async def list_folders(
         content=json.dumps(response.to_json(), default=str),
         status_code=response.code,
         media_type="application/json",
+    )
+
+
+@router.post("/search", response_model=ResponseCommonSchema[PageDto[Folder]])
+async def search_folders(
+    search_dto: FolderSearchDto,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Search and filter folders with pagination.
+
+    - **page**: Current page number (default: 1)
+    - **page_size**: Items per page (default: 10)
+    - **order**: Sort order - ASC or DESC (default: DESC)
+    - **search**: Search in folder name and description
+    - **is_default**: Filter default folders
+    - **color**: Filter by color (hex code)
+    - **has_audio**: Filter folders with/without audio files
+    - **min_audio_count**: Minimum number of audio files
+    - **max_audio_count**: Maximum number of audio files
+    - **from_date**: Filter folders created after date
+    - **to_date**: Filter folders created before date
+    - **is_dropdown**: Return all items without pagination
+
+    Response includes:
+    - **data**: Array of folders with audio_count
+    - **meta**: Pagination metadata (page, page_size, item_count, page_count, etc.)
+    """
+    paginated_folders = folder_service.search_folders(
+        db=db,
+        user_id=current_user.id,
+        search_dto=search_dto,
+    )
+
+    return PaginationHelper.create_response(
+        paginated_data=paginated_folders,
+        message="Folders retrieved successfully",
     )
 
 
@@ -193,4 +235,3 @@ async def move_audio_to_folder(
         status_code=response.code,
         media_type="application/json",
     )
-
